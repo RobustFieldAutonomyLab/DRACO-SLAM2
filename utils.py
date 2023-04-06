@@ -1,5 +1,109 @@
 import gtsam
+import pickle
+import rosbag
 import numpy as np
+
+from scipy.spatial.transform import Rotation
+
+from loop_closure import LoopClosure
+
+def gtsam_to_numpy(pose : gtsam.Pose2) -> np.array:
+    """Convert a gtsam pose2 to a numpy array
+
+    Args:
+        pose (gtsam.Pose2): the pose we want to convert
+
+    Returns:
+        np.array: numpy array [x,y,theta]
+    """
+
+    return np.array([pose.x(),pose.y(),pose.theta()])
+
+def numpy_to_gtsam(pose : np.array) -> gtsam.Pose2:
+    """Conver a numpy array into a gtsam.Pose2
+
+    Args:
+        pose (np.array): the numpy array [x,y,theta]
+
+    Returns:
+        gtsam.Pose2: the pose as a gtsam.Pose2
+    """
+
+    return gtsam.Pose2(pose[0],pose[1],pose[2])
+
+def rot_to_euler(matrix : np.array) -> float:
+    """Get the angle from a 2x2 rotation matrix
+
+    Args:
+        matrix (np.array): the rotation matrix
+
+    Returns:
+        float: the single angle from the matrix
+    """
+
+    # get the theta rotation angle for ICP
+    matrix = np.row_stack((np.column_stack((matrix, [0, 0])), [0, 0, 1]))
+    theta = Rotation.from_matrix(matrix).as_euler("xyz")[2]
+    return theta
+
+def get_ground_truth(path:str,id:int,stamps:list) -> list:
+    """Get a ground truth trajectory using the timestamps from a SLAM run
+
+    Args:
+        path (str): _description_
+        id (int): the id of the robot mission (1,2,3,etc.)
+        stamps (list): the list of timestamps from the slam keyframes
+
+    Returns:
+        list: list of GTSAM.Pose2, these are the true poses for SLAM
+    """
+
+    with open(r"/home/jake/Desktop/holoocean_bags/scrape/" + str(id) +".pickle", "rb") as input_file:
+        data_one = pickle.load(input_file)
+    bag = rosbag.Bag('/home/jake/Desktop/holoocean_bags/' + str(id) + '.bag')
+    table = {}
+    for stamp in stamps:
+        stamp = stamp.to_sec()
+        table[stamp] = stamp
+
+    out = []
+    for topic, msg, t in bag.read_messages(topics=['/pose_true']):
+        temp = (msg.header.stamp).to_sec()
+        if temp in table:
+            table[temp]
+            x = msg.pose.position.x
+            y = msg.pose.position.y
+            z = msg.pose.position.z
+            qx = msg.pose.orientation.x
+            qy = msg.pose.orientation.y
+            qz = msg.pose.orientation.z
+            qw = msg.pose.orientation.w
+            pose = gtsam.Pose3(gtsam.Rot3.Quaternion(qw, qx, qy, qz),gtsam.Point3(x,-y,z))
+            out.append(gtsam.Pose2(pose.x(),pose.y(),pose.rotation().yaw()))
+    bag.close()
+    return out
+
+def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_distance:float, max_rotation:float) -> bool:
+    """Test if a loop closure is correct or incorrect. Returns boolean of that question. 
+
+    Args:
+        loop_out (LoopClosure): the loop closure, after run through the registration system
+        one (gtsam.Pose2): the true pose of source
+        two (gtsam.Pose2): the true pose of target
+        max_distance (float): the max distance between poses to be correct
+        max_rotation (float): the max theta angle beteween poses to be correct
+
+    Returns:
+        bool: True/False if this loop closure is correct/incorrect
+    """
+
+    true_between = one.between(two) # get the true transform between poses
+    temp = loop_out.icp_transform.inverse() 
+    icp_result = temp.compose(loop_out.gi_transform.inverse()) # get the ICP derived transform
+    differnce = true_between.between(icp_result) # compare them 
+    distance = np.sqrt(differnce.x()**2 + differnce.y()**2)
+    rotation = abs(differnce.theta())
+    return max_distance > distance and max_rotation > rotation
 
 def transform_points(points: np.array, pose: gtsam.Pose2) -> np.array:
         """transform a set of 2D points given a pose
@@ -35,6 +139,8 @@ def get_points(pose_index : int, submap_size : int, points : list, poses :list) 
         np.array: aggragated point cloud in the reference frame of pose_index
     """
     
+    if(pose_index >= len(points)):
+        raise KeyError
     cloud = np.array(points[pose_index])
     ref_pose = gtsam.Pose2(poses[pose_index][0],poses[pose_index][1],poses[pose_index][2])
     for i in range(pose_index-1, pose_index-submap_size-1, -1):
@@ -92,13 +198,14 @@ def get_scan_context_aggragated(points : np.array, bearing_bins : int, range_bin
     return polar_image, ring_key
 
 
-def get_all_context(poses : list, points : np.array, 
-                                        SUBMAP_SIZE : int, 
-                                        BEARING_BINS : int, 
-                                        RANGE_BINS : int, 
-                                        MAX_RANGE : int,
-                                        MAX_BEARING : int) -> list:
-    """_summary_
+def get_all_context(poses : list, 
+                                points : np.array, 
+                                SUBMAP_SIZE : int, 
+                                BEARING_BINS : int, 
+                                RANGE_BINS : int, 
+                                MAX_RANGE : int,
+                                MAX_BEARING : int) -> list:
+    """Get all the context images from a whole mission
 
     Args:
         poses (list): _description_
