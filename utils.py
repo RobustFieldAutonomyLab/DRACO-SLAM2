@@ -311,7 +311,7 @@ def search_for_loops(reg,robots:dict,robot_id_source:int,robot_id_target:int,MAX
 def reject_loops(loops:list,min_points:int,ratio_points:float,context_difference:int,min_overlap:float) -> list:
     """Cull loop closures from the input list based on several thresholds
 
-    Args:asd
+    Args:
         loops (list): the list of loop closures
         min_points (int): the minimum required points
         ratio_points (float): the max ratio between point clouds
