@@ -6,6 +6,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from loop_closure import LoopClosure
+from bruce_slam import pcl
 
 def gtsam_to_numpy(pose : gtsam.Pose2) -> np.array:
     """Convert a gtsam pose2 to a numpy array
@@ -156,7 +157,8 @@ def get_points(pose_index : int, submap_size : int, points : list, poses :list) 
             temp_pose = gtsam.Pose2(poses[i][0],poses[i][1],poses[i][2])
             temp_pose = ref_pose.between(temp_pose)
             temp = transform_points(temp, temp_pose)
-            cloud = np.row_stack((cloud,temp))      
+            cloud = np.row_stack((cloud,temp))
+    cloud = pcl.downsample(cloud,0.3)
     return cloud
 
 
