@@ -84,6 +84,43 @@ def get_ground_truth(path:str,id:int,stamps:list) -> list:
     bag.close()
     return out
 
+def load_data(file_path:str,index:int) -> dict:
+    """Load in the data from a single robot. Data is loaded
+    as a python dictionary.
+
+    Args:
+        file_path (str): path to the pickle file that is a log of the 
+        single robot SLAM mission
+        index (int): the index of the robot to read the ground truth from it's bag file
+
+    Returns:
+        dict: the compiled data for a single robot
+    """
+
+    # Load up the data
+    with open(file_path, "rb") as input_file:
+        data_one = pickle.load(input_file)
+        
+    # parse out the datafile
+    poses_one = data_one["poses"]
+    poses_one_g = []
+    for row in poses_one:
+        poses_one_g.append(numpy_to_gtsam(row))
+    points_one = data_one["points"]
+    points_t_one = data_one["points_t"]
+    time_one =  data_one["time_stamps"]
+    truth_one = get_ground_truth(None,index,time_one) # get the ground truth
+
+    # populate a dictionary with all the data
+    data = {}
+    data["poses"] = poses_one # poses as numpy arrays
+    data["poses_g"] = poses_one_g # poses from above but as gtsam.Pose2
+    data["points"] = points_one # raw points at each pose
+    data["points_t"] = points_t_one # transformed points at each pose
+    data["truth"] = truth_one # ground truth for each pose
+
+    return data
+
 def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_distance:float, max_rotation:float) -> bool:
     """Test if a loop closure is correct or incorrect. Returns boolean of that question. 
 
@@ -234,3 +271,75 @@ def get_all_context(poses : list,
         keys.append(ring_key)
         context.append(context_img)
     return keys, context
+
+def search_for_loops(reg,robots:dict,robot_id_source:int,robot_id_target:int,MAX_TREE_DIST:int,KNN:int) -> list:
+    """Search for loops between the most recent frame in robot_id_source and all the frames in robot_id_target. 
+    Apply ICP between any possible loop closures. We package these loop closures and return them as a list.
+
+    Args:
+        reg (Registration): the registration tool, this is used to perform ICP
+        robots (dict): a dictionary of Robot objects, this contains all robot data
+        robot_id_source (int): the id number of the source robot, like a vin number
+        robot_id_target (int): the id number of the target root, like a vin number
+        MAX_TREE_DIST (int): the max distance allowed in feature space when doing kdsearch
+        KNN (int): the number of neighbors we want when doing kd search
+
+    Returns:
+        list: a list of LoopClosures
+    """
+
+    loop_list = []
+
+    ring_key,ring_key_index = robots[robot_id_source].get_key() # get the descipter we want to search with
+    tree = robots[robot_id_target].get_tree() # get the tree we want to search against           
+    distances, indexes = tree.query(ring_key,k=KNN,distance_upper_bound=MAX_TREE_DIST) # search
+
+    source_points = robots[robot_id_source].get_robot_points(ring_key_index,1) # pull the cloud at source
+    source_context = robots[robot_id_source].get_context() # pull the context image at source   
+
+    indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
+    for j in indexes: # loop over the matches from the tree search
+        if j < robots[robot_id_target].total_steps: # protect for out of range
+            target_points = robots[robot_id_target].get_robot_points(j,1) # pull the cloud at target
+            target_context = robots[robot_id_target].get_context_index(j) # pull the context image at target
+            loop = LoopClosure(ring_key_index,j,source_points,target_points,source_context,target_context) 
+            loop_out = reg.evaluate(loop,10, -1,-1, -1)                
+            loop_list.append(loop_out)
+
+    return loop_list
+
+def reject_loops(loops:list,min_points:int,ratio_points:float,context_difference:int,min_overlap:float) -> list:
+    """Cull loop closures from the input list based on several thresholds
+
+    Args:asd
+        loops (list): the list of loop closures
+        min_points (int): the minimum required points
+        ratio_points (float): the max ratio between point clouds
+        context_difference (int): the max difference between context images
+        min_overlap (float): the minimum overlap between pointclouds
+
+    Returns:
+        list: the same list of loop closures, but with each status varible set
+    """
+
+    for i in range(len(loops)):
+
+        # check for min number of points in BOTH clouds
+        if min(loops[i].count) < min_points:
+            loops[i].status = False
+
+        # check the ratio between the point clouds
+        if max(loops[i].ratio) > ratio_points:
+            loops[i].status = False
+
+        # check the difference between context images
+        if loops[i].context_diff > context_difference:
+            loops[i].status = False
+
+        # check the overlap between two point clouds after registration
+        if loops[i].overlap < min_overlap:
+            loops[i].status = False
+
+    return loops
+
+
