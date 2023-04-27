@@ -1,7 +1,7 @@
 import cv2
 import gtsam
 import numpy as np
-from scipy.optimize import shgo
+from scipy.optimize import shgo, differential_evolution
 
 from utils import gtsam_to_numpy,numpy_to_gtsam,transform_points
 
@@ -106,6 +106,11 @@ class GI_ICP():
 
             if bounds is None:
                 bounds = self.pose_bounds
+
+            '''return differential_evolution(
+                 func=subroutine,
+                 bounds=bounds,
+            )'''
 
             return shgo(
                 func=subroutine,
