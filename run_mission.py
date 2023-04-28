@@ -8,28 +8,10 @@ from robot import Robot
 from registration import Registration
 from loop_closure import LoopClosure
 
-SUBMAP_SIZE = 1
-BEARING_BINS = 100
-RANGE_BINS = 16
-MAX_RANGE = 40
-MAX_BEARING = 180
-KNN = 5
-MAX_TREE_DIST = 20
-
-sampling_points = 500
-iterations = 5
-tolerance = .01
-max_translation = 10
-max_rotation = np.radians(100.)
-
-min_points = 75
-ratio_points = 2.0         
-context_difference = 100
-min_overlap = 0.55
+from config.usmma import *
 
 max_correct_distance = 2.5
 max_correct_rotation = np.radians(2.5)
-
 
 # define a registration system
 reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
@@ -46,14 +28,14 @@ for key in data.keys():
 
 queue = []
 
-for slam_step in range(67):
+for slam_step in range(99):
     print(slam_step)
 
     # step the robots forward
     for robot_id in robots.keys():
         robots[robot_id].step()
 
-    if slam_step < 22: continue
+    # if slam_step < 22: continue
 
     # search for loop closures
     #for robot_id_source in robots.keys():
@@ -64,13 +46,18 @@ for slam_step in range(67):
         loops = search_for_loops(reg,robots,robot_id_source,robot_id_target,MAX_TREE_DIST,KNN)
         loops = reject_loops(loops,min_points,ratio_points,context_difference,min_overlap)
         loops = grade_loop_list(loops,max_correct_distance,max_correct_rotation)
+        if len(loops) == 0: continue
         loop_ = keep_best_loop(loops)
+        loop_.place_loop(robots[robot_id_source].get_pose_gtsam())
+
         if loop_.status:
-            loop_.place_loop(robots[robot_id_source].get_pose_gtsam())
-            queue.append(loop_)
-            pcm_result = verify_pcm(queue,2)
+            robots[robot_id_source].add_loop_to_pcm_queue(loop_)
+            valid_loops = robots[robot_id_source].do_pcm()
+            for valid in valid_loops: plot_loop(valid)
+
+
             
-            plot_loop(loop_)
+
 
 
             

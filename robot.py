@@ -3,8 +3,9 @@ from typing import Tuple
 import numpy as np
 import gtsam
 
-from utils import get_all_context,get_points
+from utils import get_all_context,get_points,verify_pcm
 
+from loop_closure import LoopClosure
 
 class Robot():
     def __init__(self,data:dict,SUBMAP_SIZE:int,BEARING_BINS:int,RANGE_BINS:int,MAX_RANGE:int,MAX_BEARING:int):
@@ -26,6 +27,11 @@ class Robot():
                                                             RANGE_BINS,
                                                             MAX_RANGE,
                                                             MAX_BEARING)
+        self.pcm_queue = []
+        self.pcm_queue_size = 5
+        self.min_pcm = 2
+
+        self.inter_robot_loop_closures = []
         
     def step(self) -> None:
         """Increase the step of SLAM
@@ -108,6 +114,39 @@ class Robot():
     
         if self.slam_step >= len(self.poses_g):return self.poses_g[-1]
         return self.poses_g[self.slam_step]
+    
+    def add_loop_to_pcm_queue(self, loop:LoopClosure) -> None:
+        """Add a loop closure the pcm queue. Prune any old loops before we add.
+
+        Args:
+            loop (LoopClosure): the loop closure we want to add
+        """
+
+        # update the pcm queue
+        while (self.pcm_queue and loop.source_key - self.pcm_queue[0].source_key > self.pcm_queue_size):
+            self.pcm_queue.pop(0)
+        self.pcm_queue.append(loop) # add the loop
+
+    def do_pcm(self) -> list:
+        """Check the self.pcm_queue for any valid loop closures. Return them as a list.
+
+        Returns:
+            list: a list of LoopClosures
+        """
+
+        valid_loops = []
+        valid_indexes = verify_pcm(self.pcm_queue,self.min_pcm)
+        for i in valid_indexes: 
+            if self.pcm_queue[i].inserted == False:
+                self.pcm_queue[i].inserted = True
+                valid_loops.append(self.pcm_queue[i])
+        self.inter_robot_loop_closures += valid_loops
+        return valid_loops
+
+
+
+
+        
     
 
     

@@ -21,7 +21,7 @@ class GI_ICP():
         )
 
         self.icp = pcl.ICP()
-        self.icp.loadFromYaml("icp.yaml")
+        self.icp.loadFromYaml("config/icp.yaml")
         
     def global_pose_optimization_routine(
             self, source_points, source_pose, target_points, target_pose, point_noise=0.5
