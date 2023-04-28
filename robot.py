@@ -1,6 +1,7 @@
 from scipy.spatial import KDTree
 from typing import Tuple
 import numpy as np
+import gtsam
 
 from utils import get_all_context,get_points
 
@@ -98,7 +99,15 @@ class Robot():
 
         return get_points(index,submap_size,self.points,self.poses)
     
+    def get_pose_gtsam(self) -> gtsam.Pose2:
+        """Return the pose at the current step
+
+        Returns:
+            gtsam.Pose2: _description_
+        """
     
+        if self.slam_step >= len(self.poses_g):return self.poses_g[-1]
+        return self.poses_g[self.slam_step]
     
 
     

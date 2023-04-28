@@ -3,7 +3,7 @@ import gtsam
 import numpy as np
 import matplotlib.pyplot as plt
 
-from utils import load_data,search_for_loops,reject_loops
+from utils import load_data,search_for_loops,reject_loops,grade_loop_list,plot_loop,keep_best_loop,verify_pcm
 from robot import Robot
 from registration import Registration
 from loop_closure import LoopClosure
@@ -44,8 +44,7 @@ robot_list = [1,2]
 for key in data.keys():
     robots[key] = Robot(data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
 
-loop_list = []
-loop_grades = []
+queue = []
 
 for slam_step in range(67):
     print(slam_step)
@@ -53,6 +52,8 @@ for slam_step in range(67):
     # step the robots forward
     for robot_id in robots.keys():
         robots[robot_id].step()
+
+    if slam_step < 22: continue
 
     # search for loop closures
     #for robot_id_source in robots.keys():
@@ -62,3 +63,15 @@ for slam_step in range(67):
         if robot_id_target == robot_id_source: continue # do not search with self
         loops = search_for_loops(reg,robots,robot_id_source,robot_id_target,MAX_TREE_DIST,KNN)
         loops = reject_loops(loops,min_points,ratio_points,context_difference,min_overlap)
+        loops = grade_loop_list(loops,max_correct_distance,max_correct_rotation)
+        loop_ = keep_best_loop(loops)
+        if loop_.status:
+            loop_.place_loop(robots[robot_id_source].get_pose_gtsam())
+            queue.append(loop_)
+            pcm_result = verify_pcm(queue,2)
+            
+            plot_loop(loop_)
+
+
+            
+

@@ -95,7 +95,7 @@ class GI_ICP():
 
             return subroutine, pose_samples
 
-    def global_pose_optimization_execute(self, subroutine, bounds=None) -> np.array:
+    def global_pose_optimization_execute(self, subroutine, bounds=None, optimizer=1) -> np.array:
             """Using the provided subroutine, use scipy SHGO to find a pose
             Args:
                 subroutine (function): the function to be minimized
@@ -107,19 +107,22 @@ class GI_ICP():
             if bounds is None:
                 bounds = self.pose_bounds
 
-            '''return differential_evolution(
-                 func=subroutine,
-                 bounds=bounds,
-            )'''
-
-            return shgo(
-                func=subroutine,
-                bounds=bounds,
-                n=self.sampling_points,
-                iters=self.iterations,
-                sampling_method="sobol",
-                minimizer_kwargs={"options": {"ftol": self.tolerance}},
-            )
+            if optimizer == 1:
+                return differential_evolution(
+                    func=subroutine,
+                    bounds=bounds,
+                    seed=1
+                )
+            
+            else:
+                return shgo(
+                    func=subroutine,
+                    bounds=bounds,
+                    n=self.sampling_points,
+                    iters=self.iterations,
+                    sampling_method="sobol",
+                    minimizer_kwargs={"options": {"ftol": self.tolerance}},
+                )
     
     def initialize(self, source_points : np.array, target_points : np.array) -> list:
         """Perform global initilization of ICP

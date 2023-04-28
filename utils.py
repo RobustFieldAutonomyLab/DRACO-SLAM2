@@ -2,8 +2,11 @@ import gtsam
 import pickle
 import rosbag
 import numpy as np
-
+import matplotlib.pyplot as plt
+from typing import Tuple
 from scipy.spatial.transform import Rotation
+from collections import defaultdict
+from itertools import combinations
 
 from loop_closure import LoopClosure
 from bruce_slam import pcl
@@ -121,7 +124,7 @@ def load_data(file_path:str,index:int) -> dict:
 
     return data
 
-def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_distance:float, max_rotation:float) -> bool:
+def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_distance:float, max_rotation:float) -> Tuple[bool,gtsam.Pose2]:
     """Test if a loop closure is correct or incorrect. Returns boolean of that question. 
 
     Args:
@@ -132,7 +135,7 @@ def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_dista
         max_rotation (float): the max theta angle beteween poses to be correct
 
     Returns:
-        bool: True/False if this loop closure is correct/incorrect
+        Tuple[bool,gtsam.Pose2]: True/False if this loop closure is correct/incorrect and the error in gtsam format
     """
 
     true_between = one.between(two) # get the true transform between poses
@@ -141,8 +144,19 @@ def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_dista
     differnce = true_between.between(icp_result) # compare them 
     distance = np.sqrt(differnce.x()**2 + differnce.y()**2)
     rotation = abs(differnce.theta())
-    return max_distance > distance and max_rotation > rotation
+    return max_distance > distance and max_rotation > rotation, differnce
 
+def grade_loop_list(loops:list,max_correct_distance:float,max_correct_rotation:float) -> list:
+
+    for i in range(len(loops)):
+        loops[i].grade, loops[i].pose_error = grade_loop(loops[i],
+                                                            loops[i].true_source,
+                                                            loops[i].true_target,
+                                                            max_correct_distance,
+                                                            max_correct_rotation)
+                                
+    return loops
+        
 def transform_points(points: np.array, pose: gtsam.Pose2) -> np.array:
         """transform a set of 2D points given a pose
 
@@ -302,9 +316,17 @@ def search_for_loops(reg,robots:dict,robot_id_source:int,robot_id_target:int,MAX
         if j < robots[robot_id_target].total_steps: # protect for out of range
             target_points = robots[robot_id_target].get_robot_points(j,1) # pull the cloud at target
             target_context = robots[robot_id_target].get_context_index(j) # pull the context image at target
-            loop = LoopClosure(ring_key_index,j,source_points,target_points,source_context,target_context) 
-            loop_out = reg.evaluate(loop,10, -1,-1, -1)                
-            loop_list.append(loop_out)
+            loop = LoopClosure(ring_key_index,
+                               j,
+                               source_points,
+                               target_points,
+                               source_context,
+                               target_context,
+                               true_source=robots[robot_id_source].truth[ring_key_index],
+                               true_target=robots[robot_id_target].truth[j]) 
+            loop_out = reg.evaluate(loop,10, -1,-1, -1)
+            if loop_out.ratio is not None:                
+                loop_list.append(loop_out)
 
     return loop_list
 
@@ -341,5 +363,145 @@ def reject_loops(loops:list,min_points:int,ratio_points:float,context_difference
             loops[i].status = False
 
     return loops
+
+def keep_best_loop(loops:list) -> LoopClosure:
+    """Keep only the best loop closure from a batch
+
+    Args:
+        loops (list): a list of loop closures
+
+    Returns:
+        LoopClosure: the loopclosure with the highest overlap
+    """
+
+    scores = []
+    for loop in loops: scores.append(loop.overlap)
+    return loops[np.argmax(scores)]
+
+def plot_loop(loop:LoopClosure) -> None:
+    """Plot a loop closure using matplotlib
+
+    Args:
+        loop (LoopClosure): the loop closure we want to vis
+    """
+
+    fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(15, 15))
+    '''ax1.scatter(loop.reg_points[:,0],loop.reg_points[:,1],c="blue")
+    ax1.scatter(loop.target_points[:,0],loop.target_points[:,1],c="red")'''
+
+    source_temp = transform_points(loop.source_points,loop.source_pose)
+    target_temp = transform_points(loop.target_points,loop.target_pose)
+
+    ax1.scatter(source_temp[:,0],-source_temp[:,1],c="blue")
+    ax1.scatter(target_temp[:,0],-target_temp[:,1],c="red")
+    ax1.axis("square")
+
+    source_temp = transform_points(loop.source_points,loop.true_source)
+    target_temp = transform_points(loop.target_points,loop.true_target)
+
+    ax2.scatter(source_temp[:,0],-source_temp[:,1],c="blue")
+    ax2.scatter(target_temp[:,0],-target_temp[:,1],c="red")
+    ax2.axis("square")
+
+    if loop.status and loop.grade:
+        fig.suptitle("True Positive",fontsize=20)
+    elif loop.status and loop.grade == False:
+        fig.suptitle("False Positive",fontsize=20)
+    elif loop.status == False and loop.grade:
+        fig.suptitle("False Negative",fontsize=20)
+    elif loop.status == False and loop.grade == False:
+        fig.suptitle("True Negative",fontsize=20)
+
+    plt.show()
+
+def find_cliques(G:defaultdict):
+    """Returns all maximal cliques in an undirected graph.
+    Args:
+        G (defaultdict): consicentcy graph
+    """
+
+    if len(G) == 0:
+        return
+
+    adj = {u: {v for v in G[u] if v != u} for u in G}
+    Q = [None]
+
+    subg = set(G)
+    cand = set(G)
+    u = max(subg, key=lambda u: len(cand & adj[u]))
+    ext_u = cand - adj[u]
+    stack = []
+
+    try:
+        while True:
+            if ext_u:
+                q = ext_u.pop()
+                cand.remove(q)
+                Q[-1] = q
+                adj_q = adj[q]
+                subg_q = subg & adj_q
+                if not subg_q:
+                    yield Q[:]
+                else:
+                    cand_q = cand & adj_q
+                    if cand_q:
+                        stack.append((subg, cand, ext_u))
+                        Q.append(None)
+                        subg = subg_q
+                        cand = cand_q
+                        u = max(subg, key=lambda u: len(cand & adj[u]))
+                        ext_u = cand - adj[u]
+            else:
+                Q.pop()
+                subg, cand, ext_u = stack.pop()
+    except IndexError:
+        pass
+
+def verify_pcm(queue:list, min_pcm_value:int) -> list:
+        """Get the pairwise consistent measurements.
+        Args:
+            queue (list): the list of loop closures being checked.
+            min_pcm_value (int): the min pcm value we want
+        Returns:
+            list: returns any pairwise consistent loops. We return a list of indexes in the provided queue.
+        """
+
+        # check if we have enough loops to bother
+        if len(queue) < min_pcm_value:
+            return []
+
+        # convert the loops to a consistentcy graph
+        G = defaultdict(list)
+        for (a, ret_il), (b, ret_jk) in combinations(zip(range(len(queue)), queue), 2):
+            pi = ret_il.target_pose
+            pj = ret_jk.target_pose
+            pil = ret_il.estimated_transform
+            plk = ret_il.source_pose.between(ret_jk.source_pose)
+            pjk1 = ret_jk.estimated_transform
+            pjk2 = pj.between(pi.compose(pil).compose(plk))
+
+            error = gtsam.Pose2.Logmap(pjk1.between(pjk2))
+            md = error.dot(np.linalg.inv(ret_jk.cov)).dot(error)
+            # chi2.ppf(0.99, 3) = 11.34
+            if md < 11.34:  # this is not a magic number
+                G[a].append(b)
+                G[b].append(a)
+
+        # find the sets of consistent loops
+        maximal_cliques = list(find_cliques(G))
+
+        # if we got nothing, return nothing
+        if not maximal_cliques:
+            return []
+
+        # sort and return only the largest set, also checking that the set is large enough
+        maximum_clique = sorted(maximal_cliques, key=len, reverse=True)[0]
+        if len(maximum_clique) < min_pcm_value:
+            return []
+
+        return maximum_clique
+
+
+
 
 
