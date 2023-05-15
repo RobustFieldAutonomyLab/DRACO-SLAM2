@@ -7,6 +7,7 @@ from utils import load_data,search_for_loops,reject_loops,grade_loop_list,plot_l
 from robot import Robot
 from registration import Registration
 from loop_closure import LoopClosure
+from comm_link import CommLink
 
 from config.usmma import *
 
@@ -29,6 +30,8 @@ for key in data.keys():
 queue = []
 loop_list = []
 
+comm_link = CommLink()
+
 for slam_step in range(63):
     print(slam_step)
 
@@ -40,7 +43,7 @@ for slam_step in range(63):
     for robot_id_source in robots.keys():
         for robot_id_target in robots.keys():
             if robot_id_target == robot_id_source: continue # do not search with self
-            loops = search_for_loops(reg,robots,robot_id_source,robot_id_target,MAX_TREE_DIST,KNN)
+            loops = search_for_loops(reg,robots,comm_link,robot_id_source,robot_id_target,MAX_TREE_DIST,KNN)
             loops = reject_loops(loops,min_points,ratio_points,context_difference,min_overlap)
             loops = grade_loop_list(loops,max_correct_distance,max_correct_rotation)
 
@@ -56,7 +59,8 @@ for slam_step in range(63):
                     valid.target_robot_id = robot_id_target
                     loop_list.append(valid)
 
-    # plot here
+
+comm_link.plot()
 
 temp = robots[1].truth
 poses_one = []

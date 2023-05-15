@@ -286,12 +286,13 @@ def get_all_context(poses : list,
         context.append(context_img)
     return keys, context
 
-def search_for_loops(reg,robots:dict,robot_id_source:int,robot_id_target:int,MAX_TREE_DIST:int,KNN:int) -> list:
+def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,MAX_TREE_DIST:int,KNN:int) -> list:
     """Search for loops between the most recent frame in robot_id_source and all the frames in robot_id_target. 
     Apply ICP between any possible loop closures. We package these loop closures and return them as a list.
 
     Args:
         reg (Registration): the registration tool, this is used to perform ICP
+        comm_link (CommLink): the communications link tracker
         robots (dict): a dictionary of Robot objects, this contains all robot data
         robot_id_source (int): the id number of the source robot, like a vin number
         robot_id_target (int): the id number of the target root, like a vin number
@@ -314,6 +315,13 @@ def search_for_loops(reg,robots:dict,robot_id_source:int,robot_id_target:int,MAX
     indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
     for j in indexes: # loop over the matches from the tree search
         if j < robots[robot_id_target].total_steps: # protect for out of range
+            
+            # log the comms cost
+            required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target,j)
+            comm_link.log_message(comms_cost_request)
+            comms_cost_point_clouds = robots[robot_id_target].get_data(required_data)
+            comm_link.log_message(comms_cost_point_clouds)
+
             target_points = robots[robot_id_target].get_robot_points(j,1) # pull the cloud at target
             target_context = robots[robot_id_target].get_context_index(j) # pull the context image at target
             loop = LoopClosure(ring_key_index,
@@ -385,6 +393,7 @@ def plot_loop(loop:LoopClosure) -> None:
         loop (LoopClosure): the loop closure we want to vis
     """
 
+    print(loop.overlap  )
     fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(15, 15))
     '''ax1.scatter(loop.reg_points[:,0],loop.reg_points[:,1],c="blue")
     ax1.scatter(loop.target_points[:,0],loop.target_points[:,1],c="red")'''

@@ -27,11 +27,15 @@ class Robot():
                                                             RANGE_BINS,
                                                             MAX_RANGE,
                                                             MAX_BEARING)
+        
+        self.submap_size = SUBMAP_SIZE
         self.pcm_queue = []
         self.pcm_queue_size = 5
         self.min_pcm = 2
 
         self.inter_robot_loop_closures = []
+
+        self.point_clouds_received = {} # log when we have gotten a point cloud. Format: robot_id_number, keyframe_id
         
     def step(self) -> None:
         """Increase the step of SLAM
@@ -142,6 +146,57 @@ class Robot():
                 valid_loops.append(self.pcm_queue[i])
         self.inter_robot_loop_closures += valid_loops
         return valid_loops
+    
+    def check_for_data(self, robot_id:int, keyframe_id:int) -> Tuple[list,int]:
+        """Checks if we need any data exchange to complete the ICP call.
+        returns a list of [[robot_id_number, keyframe_id]]
+
+        Args:
+            robot (int): robot id number we are calling icp with
+            index (int): the keyframe index for the above robot
+
+        Returns:
+            list: a list of the point clouds we need to complete this job
+            int: the cost of requesting this data
+        """
+
+        data_requests = [] # list of the data we need
+        comms_cost = 0
+        # check the whole submap to see if we need any of the point clouds
+        for i in range(keyframe_id-self.submap_size,keyframe_id+self.submap_size+1):
+            if (robot_id,i) not in self.point_clouds_received and i >= 0: # if we don't have it, ask for it
+                data_requests.append([robot_id,i])
+                self.point_clouds_received[(robot_id,i)] = True
+                comms_cost += 32 + 32 # we only need two 32 bit integers
+        return data_requests,comms_cost
+    
+    def get_data(self,data_request:list) -> int:
+        """Find the communication cost of getting the above data
+
+        Args:
+            data_request (list): the list of robot keyframes we want
+
+        Returns:
+            int: the cost of exchanging this data
+        """
+
+        comms_cost = 0
+        for row in data_request:
+            _, i = row
+            if i < len(self.points): # check for out of range
+                # get the comms cost
+                # Each point is a pair of 32 bit floats
+                comms_cost += len(self.points[i]) * 2 * 32 
+
+        return comms_cost
+
+
+
+
+
+
+    
+    
 
 
 
