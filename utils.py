@@ -510,6 +510,44 @@ def verify_pcm(queue:list, min_pcm_value:int) -> list:
 
         return maximum_clique
 
+def check_frame_for_overlap(source_points:np.array,source_pose:gtsam.Pose2,target_pose:gtsam.Pose2,min_points:int) -> bool:
+    """This function tests if there is enough overlap between two poses
+    for there to possibly be a loop closure. Note that we only have one set of points not two. 
+    We project the source_points into the target frame and use the sensor model to check if 
+    there is significant overlap between these two frames without data exchange. 
+
+    Args:
+        source_points (np.array): source point cloud
+        source_pose (gtsam.Pose2): the location of the source point cloud
+        target_pose (gtsam.Pose2): the location of the target frame
+        min_points (int): the minimum number of points for this to be a potential loop closure
+
+    Returns:
+        bool: True/False, is there enough overlap to be a potential loop closure
+    """
+
+    # transform the points and parse the frame
+    source_points_transformed = transform_points(source_points,source_pose)
+    x,y,theta = target_pose.x(), target_pose.y(), target_pose.theta()
+    
+    # get the range and bearing relative to the target pose
+    r = np.sqrt((x - source_points_transformed[:,0])**2 + (y - source_points_transformed[:,1])**2)
+    b = np.degrees(np.arctan2(y - source_points_transformed[:,1],
+                              x - source_points_transformed[:,0]))
+    
+    # filter the points based on sensor range
+    source_points = source_points[r <= 30]
+
+    # filter based on sensor bearing, max left and right angle
+    yaw = 180 + np.degrees(theta)
+    yaw_min = yaw - 65.
+    yaw_max = yaw + 65.
+    source_points = source_points[(b <= yaw_max) & (b >= yaw_min)]
+
+    return len(source_points) >= min_points
+
+    
+
 
 
 
