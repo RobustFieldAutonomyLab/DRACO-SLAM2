@@ -121,6 +121,7 @@ def load_data(file_path:str,index:int) -> dict:
     data["points"] = points_one # raw points at each pose
     data["points_t"] = points_t_one # transformed points at each pose
     data["truth"] = truth_one # ground truth for each pose
+    data["factors"] = data_one["factors"] # the factors in the graph
 
     return data
 
@@ -546,6 +547,17 @@ def check_frame_for_overlap(source_points:np.array,source_pose:gtsam.Pose2,targe
 
     return len(source_points) >= min_points
 
+def X(index:int) -> gtsam.symbol:
+    """Convert an index to a gtsam symbol. 
+
+    Args:
+        index (int): the value we want symbolized
+
+    Returns:
+        gtsam.symbol: the output gtsam symbol
+    """
+
+    return gtsam.symbol("x",index)
     
 
 

@@ -3,7 +3,7 @@ from typing import Tuple
 import numpy as np
 import gtsam
 
-from utils import get_all_context,get_points,verify_pcm
+from utils import get_all_context,get_points,verify_pcm, X
 
 from loop_closure import LoopClosure
 
@@ -18,6 +18,7 @@ class Robot():
         self.points = data["points"]  # raw points at each pose
         self.points_t = data["points_t"] # transformed points at each pose
         self.truth = data["truth"] # ground truth for each pose
+        self.factors = data["factors"] # the factors in the graph
 
         # get the scan context images and ring keys
         self.keys, self.context = get_all_context(self.poses,
@@ -33,16 +34,100 @@ class Robot():
         self.pcm_queue_size = 5
         self.min_pcm = 2
 
+        self.graph = gtsam.NonlinearFactorGraph()
+        self.values = gtsam.Values()
+        self.values_added = {}
+        self.isam_params = gtsam.ISAM2Params()
+        self.isam = gtsam.ISAM2(self.isam_params)
+        self.state_estimate = []
+
+        self.prior_sigmas = [0.1, 0.1, 0.01]
+        self.prior_model = self.create_noise_model(self.prior_sigmas)
+
         self.inter_robot_loop_closures = []
 
         self.point_clouds_received = {} # log when we have gotten a point cloud. Format: robot_id_number, keyframe_id
         
+    def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
+        """Create a noise model from a list of sigmas, treated like a diagnal matrix.
+
+        Returns:
+            gtsam.noiseModel.Diagonal: gtsam version of input
+        """
+        return gtsam.noiseModel.Diagonal.Sigmas(np.r_[sigmas])
+    
+    def create_full_noise_model(self, cov: np.array) -> gtsam.noiseModel.Gaussian.Covariance:
+        """Create a noise model from a numpy array
+
+        Args:
+            cov (np.array): numpy array of the covariance matrix.
+
+        Returns:
+            gtsam.noiseModel.Gaussian.Covariance: gtsam version of the input
+        """
+
+        return gtsam.noiseModel.Gaussian.Covariance(cov)
+    
     def step(self) -> None:
         """Increase the step of SLAM
         """
 
+        if self.slam_step == 0:
+            self.start_graph()
+            self.update_graph()
         self.slam_step += 1
+        self.add_factors()
+        self.update_graph()
 
+    def start_graph(self) -> None:
+        """Start the SLAM graph by inserting the prior.
+        """
+
+        pose = gtsam.Pose2(0,0,0)
+        factor = gtsam.PriorFactorPose2(X(0), pose, self.prior_model)
+        self.graph.add(factor)
+        self.values.insert(X(0), pose)
+        self.values_added[0] = True
+        
+    def add_factors(self) -> None:
+        """Add the most recent factors to the graph. The 
+        factors we need to add are at self.slam_step
+        """
+        
+        factors_to_add = self.factors[self.slam_step]
+        for factor in factors_to_add:
+            i,j,transform,sigmas = factor
+            sigmas = np.array(sigmas)
+
+            if sigmas.shape == (3,): 
+                noise_model = self.create_noise_model(sigmas)
+            else: 
+                noise_model = self.create_full_noise_model(sigmas)
+
+            factor_gtsam = gtsam.BetweenFactorPose2(X(i),X(j),transform,noise_model)
+
+            if j not in self.values_added:
+                self.values.insert(X(j), self.poses_g[j])
+                self.values_added[j] = True
+            self.graph.add(factor_gtsam)
+    
+    def update_graph(self) -> None:
+        """Update the state estimate based on what we have in
+        the graph.
+        """
+
+        # push the newest factors into the ISAM2 instance
+        self.isam.update(self.graph, self.values)
+        self.graph.resize(0)  # clear the graph and values once we push it to ISAM2
+        self.values.clear()
+
+        # Update the whole trajectory
+        values = self.isam.calculateEstimate()
+        temp = []
+        for x in range(values.size()):
+            temp.append(values.atPose2(X(x)))
+        self.state_estimate = temp
+            
     def get_keys(self) -> np.array:
         """Return the array of ring keys from this SLAM step
 
