@@ -558,6 +558,20 @@ def X(index:int) -> gtsam.symbol:
     """
 
     return gtsam.symbol("x",index)
+
+def robot_to_symbol(robot_id:int,keyframe_id:int) -> gtsam.symbol:
+    """Get the gtsam symbol of a given robot at a given keyframe
+
+    Args:
+        robot_id (int): the robot id number we want the symbol for
+        keyframe_id (int): the keyframe id number 
+
+    Returns:
+        gtsam.symbol: symbol object with the input info encoded
+    """
+    
+    letters = {1:"a",2:"b",3:"c",4:"d"} # lookup table for robot symbols 
+    return gtsam.symbol(letters[robot_id],keyframe_id)
     
 
 

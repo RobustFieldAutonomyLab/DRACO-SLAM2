@@ -3,7 +3,7 @@ from typing import Tuple
 import numpy as np
 import gtsam
 
-from utils import get_all_context,get_points,verify_pcm, X
+from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol
 
 from loop_closure import LoopClosure
 
@@ -45,6 +45,8 @@ class Robot():
 
         self.prior_sigmas = [0.1, 0.1, 0.01]
         self.prior_model = self.create_noise_model(self.prior_sigmas)
+
+        self.multi_robot_frames = {}
 
         self.inter_robot_loop_closures = []
 
@@ -127,7 +129,7 @@ class Robot():
         # Update the whole trajectory
         values = self.isam.calculateEstimate()
         temp = []
-        for x in range(values.size()):
+        for x in range(self.slam_step+1):
             pose = values.atPose2(X(x))
             temp.append([pose.x(),pose.y(),pose.theta()])
         self.state_estimate = np.array(temp)
@@ -292,6 +294,35 @@ class Robot():
                 comms_cost += len(self.points[i]) * 2 * 32 
 
         return comms_cost
+    
+    def merge_slam(self,loop_closures:list) -> None:
+        """Use the multi-robot loop closures to merge our SLAM graphs. 
+        Here we will need to add any loop closures we have found and
+        the partner robot's trajectory.
+        """
+
+        for loop in loop_closures:
+            
+            # parse some info
+            source_symbol = X(loop.source_key)
+            target_symbol = robot_to_symbol(loop.target_robot_id,loop.target_key)
+            noise_model = self.create_noise_model(self.prior_sigmas) #TODO update noise model
+
+            # build a factor and add it
+            factor = gtsam.BetweenFactorPose2(source_symbol,
+                                                target_symbol,
+                                                loop.estimated_transform,
+                                                noise_model)
+            self.graph.add(factor)
+            
+            # track which frames we have added to the graph
+            if loop.target_robot_id not in self.multi_robot_frames: 
+                self.multi_robot_frames[loop.target_robot_id] = {}
+            if loop.target_key not in self.multi_robot_frames[loop.target_robot_id]:
+                self.multi_robot_frames[loop.target_robot_id][loop.target_key] = True
+                self.values.insert(target_symbol, loop.target_pose) # add the initial guess
+
+        self.update_graph() # upate the graph with the new info
 
 
 

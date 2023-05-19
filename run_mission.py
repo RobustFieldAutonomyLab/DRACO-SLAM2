@@ -55,8 +55,14 @@ for slam_step in range(63):
             loop_.target_robot_id = robot_id_target
 
             if loop_.status:
+                # update and solve PCM
                 robots[robot_id_source].add_loop_to_pcm_queue(loop_)
                 valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
+
+                # if we have a valid solution from PCM, merge the graphs
+                if len(valid_loops) > 0:
+                    robots[robot_id_source].merge_slam(valid_loops)
+
                 for valid in valid_loops: 
                     loop_list.append(valid)
                     plot_loop(valid)
