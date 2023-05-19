@@ -18,14 +18,14 @@ max_correct_rotation = np.radians(2.5)
 reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
 
 # Load up the data
-data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/1.pickle",1)
-data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/2.pickle",2)
+data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/5.pickle",5)
+data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/6.pickle",6)
 data = {1:data_one,2:data_two}
 
 robots = {}
 robot_list = [1,2]
 for key in data.keys():
-    robots[key] = Robot(data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
+    robots[key] = Robot(key,data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
 
 queue = []
 loop_list = []
@@ -38,6 +38,7 @@ for slam_step in range(63):
     # step the robots forward
     for robot_id in robots.keys():
         robots[robot_id].step()
+        comm_link.log_message(128) # log the descriptor sharing
 
     # search for loop closures
     for robot_id_source in robots.keys():
@@ -50,15 +51,15 @@ for slam_step in range(63):
             if len(loops) == 0: continue
             loop_ = keep_best_loop(loops)
             loop_.place_loop(robots[robot_id_source].get_pose_gtsam())
+            loop_.source_robot_id = robot_id_source
+            loop_.target_robot_id = robot_id_target
 
             if loop_.status:
                 robots[robot_id_source].add_loop_to_pcm_queue(loop_)
-                valid_loops = robots[robot_id_source].do_pcm()
+                valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
                 for valid in valid_loops: 
-                    valid.source_robot_id = robot_id_source
-                    valid.target_robot_id = robot_id_target
                     loop_list.append(valid)
-
+                    plot_loop(valid)
 
 comm_link.plot()
 

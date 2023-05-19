@@ -8,8 +8,10 @@ from utils import get_all_context,get_points,verify_pcm, X
 from loop_closure import LoopClosure
 
 class Robot():
-    def __init__(self,data:dict,SUBMAP_SIZE:int,BEARING_BINS:int,RANGE_BINS:int,MAX_RANGE:int,MAX_BEARING:int):
+    def __init__(self,robot_id:int,data:dict,SUBMAP_SIZE:int,BEARING_BINS:int,RANGE_BINS:int,MAX_RANGE:int,MAX_BEARING:int):
         
+        self.robot_id = robot_id # unique ID number
+
         self.slam_step = 0 # we want to track how far along the mission is, what SLAM step are we on
         self.total_steps = len(data["poses"])
 
@@ -30,7 +32,7 @@ class Robot():
                                                             MAX_BEARING)
         
         self.submap_size = SUBMAP_SIZE
-        self.pcm_queue = []
+        self.pcm_dict = {}
         self.pcm_queue_size = 5
         self.min_pcm = 2
 
@@ -213,24 +215,38 @@ class Robot():
             loop (LoopClosure): the loop closure we want to add
         """
 
-        # update the pcm queue
-        while (self.pcm_queue and loop.source_key - self.pcm_queue[0].source_key > self.pcm_queue_size):
-            self.pcm_queue.pop(0)
-        self.pcm_queue.append(loop) # add the loop
+        # which robot is this loop closure with?
+        # pull the relavant PCM queue
+        if loop.target_robot_id not in self.pcm_dict:
+            pcm_queue = []
+        else:
+            pcm_queue = self.pcm_dict[loop.target_robot_id]
 
-    def do_pcm(self) -> list:
+        # update the pcm queue
+        while (pcm_queue and loop.source_key - pcm_queue[0].source_key > self.pcm_queue_size):
+            pcm_queue.pop(0)
+        pcm_queue.append(loop) # add the loop
+        self.pcm_dict[loop.target_robot_id] = pcm_queue # store the pcm queue 
+        
+    def do_pcm(self,robot_id:int) -> list:
         """Check the self.pcm_queue for any valid loop closures. Return them as a list.
+
+        Args:
+            robot_id (int): the ID of the robot the most recent loop is with. This 
+            is the queue we need to check with PCM. 
 
         Returns:
             list: a list of LoopClosures
         """
 
+        assert(len(self.pcm_dict[robot_id]) != 0)
+
         valid_loops = []
-        valid_indexes = verify_pcm(self.pcm_queue,self.min_pcm)
+        valid_indexes = verify_pcm(self.pcm_dict[robot_id],self.min_pcm)
         for i in valid_indexes: 
-            if self.pcm_queue[i].inserted == False:
-                self.pcm_queue[i].inserted = True
-                valid_loops.append(self.pcm_queue[i])
+            if self.pcm_dict[robot_id][i].inserted == False:
+                self.pcm_dict[robot_id][i].inserted = True
+                valid_loops.append(self.pcm_dict[robot_id][i])
         self.inter_robot_loop_closures += valid_loops
         return valid_loops
     
