@@ -83,7 +83,7 @@ class Robot():
         """Start the SLAM graph by inserting the prior.
         """
 
-        pose = gtsam.Pose2(0,0,0)
+        pose = self.poses_g[0]
         factor = gtsam.PriorFactorPose2(X(0), pose, self.prior_model)
         self.graph.add(factor)
         self.values.insert(X(0), pose)
@@ -94,6 +94,7 @@ class Robot():
         factors we need to add are at self.slam_step
         """
         
+        if self.slam_step not in self.factors: return
         factors_to_add = self.factors[self.slam_step]
         for factor in factors_to_add:
             i,j,transform,sigmas = factor
@@ -125,9 +126,10 @@ class Robot():
         values = self.isam.calculateEstimate()
         temp = []
         for x in range(values.size()):
-            temp.append(values.atPose2(X(x)))
-        self.state_estimate = temp
-            
+            pose = values.atPose2(X(x))
+            temp.append([pose.x(),pose.y(),pose.theta()])
+        self.state_estimate = np.array(temp)
+
     def get_keys(self) -> np.array:
         """Return the array of ring keys from this SLAM step
 
