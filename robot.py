@@ -428,6 +428,16 @@ class Robot():
             temp = np.array(temp)
             plt.plot(temp[:,0],temp[:,1])
 
+        truth_zero = self.truth[0]
+        est_zero = numpy_to_gtsam(self.state_estimate[0])
+        truth_in_my_frame = []
+        for row in self.truth:
+           between = truth_zero.between(row)
+           temp = est_zero.compose(between)
+           truth_in_my_frame.append([temp.y(),temp.x()])
+        truth_in_my_frame = np.array(truth_in_my_frame)
+        plt.plot(truth_in_my_frame[:,0],truth_in_my_frame[:,1],c="black",linestyle='dashed')
+
         plt.axis("square")
         plt.show()
 
