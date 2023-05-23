@@ -43,10 +43,12 @@ class Robot():
         self.isam_params = gtsam.ISAM2Params()
         self.isam = gtsam.ISAM2(self.isam_params)
         self.state_estimate = [] # my own state estimate
+        self.covariance = []
         self.partner_robot_state_estimates = {} # my estimates about the other robots
         self.partner_robot_trajectories = {} # the trajectory each robot sends to me, they figure this out
         self.partner_reference_frames = {} # my estimate of where I think the this other robot started
         self.multi_robot_frames = {} # the frames I have added as loop closures from other robots
+        self.partner_robot_covariance = {}
 
         self.prior_sigmas = [0.1, 0.1, 0.01]
         self.prior_model = self.create_noise_model(self.prior_sigmas)
@@ -300,16 +302,21 @@ class Robot():
 
         # Update MY whole trajectory
         temp = []
+        temp_2 = []
         for x in range(self.slam_step+1):
             pose = values.atPose2(X(x))
+            cov = isam.marginalCovariance(X(x))
             temp.append([pose.x(),pose.y(),pose.theta()])
+            temp_2.append(cov)
         self.state_estimate = np.array(temp)
+        self.covariance = np.array(temp_2)
 
         # update my the estimate of my partner robots in my frame
         for robot in self.partner_robot_state_estimates.keys():
             if len(self.multi_robot_frames[robot]) == 0: continue
             for i in range(len(self.partner_robot_trajectories[robot])):
                 self.partner_robot_state_estimates[robot][i] = values.atPose2(robot_to_symbol(robot,i))
+                self.partner_robot_covariance[robot][i] = isam.marginalCovariance(robot_to_symbol(robot,i))
 
     def merge_trajectory(self,isam:gtsam.ISAM2,robot_id:int) -> gtsam.ISAM2:
         """Add the partner robot trajectory to the slam graph. Note that we use and return a copy
@@ -388,6 +395,7 @@ class Robot():
             if loop.target_robot_id not in self.multi_robot_frames: 
                 self.multi_robot_frames[loop.target_robot_id] = {}
                 self.partner_robot_state_estimates[loop.target_robot_id] = {}
+                self.partner_robot_covariance[loop.target_robot_id] = {}
 
             # Check if we have added this particular frame from this robot 
             if loop.target_key not in self.multi_robot_frames[loop.target_robot_id]:
@@ -441,9 +449,26 @@ class Robot():
         for cloud,pose in zip(self.points,self.state_estimate):
             cloud = transform_points(cloud,numpy_to_gtsam(pose))
             plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
-            
+
+        for loop in self.inter_robot_loop_closures:
+            one = numpy_to_gtsam(self.state_estimate[loop.source_key])
+            two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
+
         plt.axis("square")
         plt.show()
+
+        '''for robot in self.partner_robot_covariance.keys():
+            temp = []
+            temp_2 = []
+            i = 0
+            for row in self.partner_robot_covariance[robot].keys():
+                row = self.partner_robot_covariance[robot][row]
+                temp.append(np.linalg.det(row))
+                temp_2.append(i)
+                i += 1
+            plt.plot(temp_2,temp)
+        plt.show()'''
 
 
 
