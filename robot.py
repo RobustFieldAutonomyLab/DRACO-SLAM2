@@ -42,15 +42,14 @@ class Robot():
         self.values_added = {}
         self.isam_params = gtsam.ISAM2Params()
         self.isam = gtsam.ISAM2(self.isam_params)
-        self.state_estimate = []
-        self.partner_robot_state_estimates = {}
-        self.partner_robot_trajectories = {}
-        self.partner_reference_frames = {}
+        self.state_estimate = [] # my own state estimate
+        self.partner_robot_state_estimates = {} # my estimates about the other robots
+        self.partner_robot_trajectories = {} # the trajectory each robot sends to me, they figure this out
+        self.partner_reference_frames = {} # my estimate of where I think the this other robot started
+        self.multi_robot_frames = {} # the frames I have added as loop closures from other robots
 
         self.prior_sigmas = [0.1, 0.1, 0.01]
         self.prior_model = self.create_noise_model(self.prior_sigmas)
-
-        self.multi_robot_frames = {}
 
         self.inter_robot_loop_closures = []
 
@@ -345,10 +344,20 @@ class Robot():
             graph.add(factor)
 
             # if we have a loop closure at this step, then there is no need to add another intitial guess
-            if i not in self.multi_robot_frames[robot_id]: values.insert(robot_to_symbol(robot_id,i), pose_i)
+            if i not in self.multi_robot_frames[robot_id]:
+                # if we have solved for this pose before use that as an intitial guess
+                if robot_id in self.partner_robot_state_estimates and i in self.partner_robot_state_estimates[robot_id]:
+                    values.insert(robot_to_symbol(robot_id,i), self.partner_robot_state_estimates[robot_id][i])
+                else:
+                    values.insert(robot_to_symbol(robot_id,i), pose_i)
 
         # initial guess for last frame
-        if i + 1 not in self.multi_robot_frames[robot_id]: values.insert(robot_to_symbol(robot_id,i+1), pose_i_plus_1)
+        if i+1 not in self.multi_robot_frames[robot_id]: 
+            # if we have solved for this pose before use that as an intitial guess
+            if robot_id in self.partner_robot_state_estimates and i+1 in self.partner_robot_state_estimates[robot_id]:
+                values.insert(robot_to_symbol(robot_id,i+1), self.partner_robot_state_estimates[robot_id][i+1])
+            else:
+                values.insert(robot_to_symbol(robot_id,i+1), pose_i_plus_1)
 
         isam.update(graph, values)
 
