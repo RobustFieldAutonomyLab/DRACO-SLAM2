@@ -325,12 +325,15 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
 
             target_points = robots[robot_id_target].get_robot_points(j,1) # pull the cloud at target
             target_context = robots[robot_id_target].get_context_index(j) # pull the context image at target
+            target_pose_their_frame = robots[robot_id_target].state_estimate[j] # the target robots jth pose in it's own ref frame
+            
             loop = LoopClosure(ring_key_index,
                                j,
                                source_points,
                                target_points,
                                source_context,
                                target_context,
+                               target_pose_their_frame,
                                true_source=robots[robot_id_source].truth[ring_key_index],
                                true_target=robots[robot_id_target].truth[j]) 
             loop_out = reg.evaluate(loop,10, -1,-1, -1)

@@ -5,7 +5,7 @@ class LoopClosure():
     """A class to store all the info needed for a loop closure
     """
     
-    def __init__(self,source_key,target_key,source_points,target_points,source_context,target_context,true_source=None,true_target=None) -> None:
+    def __init__(self,source_key,target_key,source_points,target_points,source_context,target_context,target_pose_their_frame,true_source=None,true_target=None) -> None:
         self.source_key = source_key
         self.target_key = target_key
         self.source_points = source_points
@@ -36,6 +36,8 @@ class LoopClosure():
 
         self.source_robot_id = None
         self.target_robot_id = None
+
+        self.target_pose_their_frame = gtsam.Pose2(target_pose_their_frame[0], target_pose_their_frame[1], target_pose_their_frame[2])
 
         self.pose_error = None
 

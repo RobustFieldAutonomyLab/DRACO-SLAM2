@@ -2,8 +2,9 @@ from scipy.spatial import KDTree
 from typing import Tuple
 import numpy as np
 import gtsam
+import matplotlib.pyplot as plt
 
-from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol
+from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam
 
 from loop_closure import LoopClosure
 
@@ -42,6 +43,9 @@ class Robot():
         self.isam_params = gtsam.ISAM2Params()
         self.isam = gtsam.ISAM2(self.isam_params)
         self.state_estimate = []
+        self.partner_robot_state_estimates = {}
+        self.partner_robot_trajectories = {}
+        self.partner_reference_frames = {}
 
         self.prior_sigmas = [0.1, 0.1, 0.01]
         self.prior_model = self.create_noise_model(self.prior_sigmas)
@@ -115,24 +119,6 @@ class Robot():
                 self.values.insert(X(j), self.poses_g[j])
                 self.values_added[j] = True
             self.graph.add(factor_gtsam)
-    
-    def update_graph(self) -> None:
-        """Update the state estimate based on what we have in
-        the graph.
-        """
-
-        # push the newest factors into the ISAM2 instance
-        self.isam.update(self.graph, self.values)
-        self.graph.resize(0)  # clear the graph and values once we push it to ISAM2
-        self.values.clear()
-
-        # Update the whole trajectory
-        values = self.isam.calculateEstimate()
-        temp = []
-        for x in range(self.slam_step+1):
-            pose = values.atPose2(X(x))
-            temp.append([pose.x(),pose.y(),pose.theta()])
-        self.state_estimate = np.array(temp)
 
     def get_keys(self) -> np.array:
         """Return the array of ring keys from this SLAM step
@@ -295,12 +281,86 @@ class Robot():
 
         return comms_cost
     
-    def merge_slam(self,loop_closures:list) -> None:
-        """Use the multi-robot loop closures to merge our SLAM graphs. 
-        Here we will need to add any loop closures we have found and
-        the partner robot's trajectory.
+    def update_graph(self) -> None:
+        """Update the state estimate based on what we have in
+        the graph.
         """
 
+        # push the newest factors into the ISAM2 instance
+        self.isam.update(self.graph, self.values)
+        self.graph.resize(0)  # clear the graph and values once we push it to ISAM2
+        self.values.clear()
+        isam = gtsam.ISAM2(self.isam) # make a copy   
+
+        # add and update the partner robot trajectories
+        for robot in self.partner_robot_state_estimates.keys():
+            isam = self.merge_trajectory(isam,robot)
+
+        # update the state estimate
+        values = isam.calculateEstimate()
+
+        # Update MY whole trajectory
+        temp = []
+        for x in range(self.slam_step+1):
+            pose = values.atPose2(X(x))
+            temp.append([pose.x(),pose.y(),pose.theta()])
+        self.state_estimate = np.array(temp)
+
+        # update my the estimate of my partner robots in my frame
+        for robot in self.partner_robot_state_estimates.keys():
+            if len(self.multi_robot_frames[robot]) == 0: continue
+            for i in range(len(self.partner_robot_trajectories[robot])):
+                self.partner_robot_state_estimates[robot][i] = values.atPose2(robot_to_symbol(robot,i))
+
+    def merge_trajectory(self,isam:gtsam.ISAM2,robot_id:int) -> gtsam.ISAM2:
+        """Add the partner robot trajectory to the slam graph. Note that we use and return a copy
+        of the isam instance. 
+
+        Args:
+            isam (gtsam.ISAM2): copy of the isam instance
+            robot_id (int): the robot id we want to merge with
+
+        Returns:
+            gtsam.ISAM2: the update isam instance
+        """
+
+        # check if we can even perform a merge
+        if len(self.multi_robot_frames[robot_id]) == 0: return isam # do we have any loop closures?
+    
+        # objects to update isam
+        values = gtsam.Values()
+        graph = gtsam.NonlinearFactorGraph()
+
+        # add the whole trajectory
+        for i in range(len(self.partner_robot_trajectories[robot_id]) - 1):
+            pose_i = numpy_to_gtsam(self.partner_robot_trajectories[robot_id][i]) # get the poses in gtsam
+            pose_i_plus_1 = numpy_to_gtsam(self.partner_robot_trajectories[robot_id][i+1])
+            pose_i = self.partner_reference_frames[robot_id].compose(pose_i) # place in the correct ref frame
+            pose_i_plus_1 = self.partner_reference_frames[robot_id].compose(pose_i_plus_1)
+            pose_between = pose_i.between(pose_i_plus_1) # get the pose between them and package as a factor
+            factor = gtsam.BetweenFactorPose2(robot_to_symbol(robot_id,i),
+                                                robot_to_symbol(robot_id,i+1),
+                                                pose_between,
+                                                self.prior_model) # TODO update noise model
+            graph.add(factor)
+
+            # if we have a loop closure at this step, then there is no need to add another intitial guess
+            if i not in self.multi_robot_frames[robot_id]: values.insert(robot_to_symbol(robot_id,i), pose_i)
+
+        # initial guess for last frame
+        if i + 1 not in self.multi_robot_frames[robot_id]: values.insert(robot_to_symbol(robot_id,i+1), pose_i_plus_1)
+
+        isam.update(graph, values)
+
+        return isam
+        
+    def merge_slam(self,loop_closures:list) -> None:
+        """Add any multi-robot loop closures. 
+
+        Args:
+            loop_closures (list): A list of multi-robot loop closures
+        """
+        
         for loop in loop_closures:
             
             # parse some info
@@ -315,14 +375,53 @@ class Robot():
                                                 noise_model)
             self.graph.add(factor)
             
-            # track which frames we have added to the graph
+            # Check if we have ever added a frame from this robot
             if loop.target_robot_id not in self.multi_robot_frames: 
                 self.multi_robot_frames[loop.target_robot_id] = {}
+                self.partner_robot_state_estimates[loop.target_robot_id] = {}
+
+            # Check if we have added this particular frame from this robot 
             if loop.target_key not in self.multi_robot_frames[loop.target_robot_id]:
                 self.multi_robot_frames[loop.target_robot_id][loop.target_key] = True
                 self.values.insert(target_symbol, loop.target_pose) # add the initial guess
 
+        # see if we need to set the reference frame for this partner robot
+        if loop.target_robot_id not in self.partner_reference_frames:
+            self.partner_reference_frames[loop.target_robot_id] = loop.target_pose.compose(
+                                                                        loop.target_pose_their_frame.inverse())
+        
         self.update_graph() # upate the graph with the new info
+
+    def update_partner_trajectory(self,robot_id:int,trajectory:np.array) -> None:
+        """Update the trajectory. This is from the other robot performing SLAM.
+        This update is performed by one robot sending it's trajctory to another. 
+
+        Args:
+            robot_id (int): the id of the robot
+            trajectory (np.array): the trajectory from the robot
+        """
+
+        self.partner_robot_trajectories[robot_id] = trajectory
+        
+    def plot(self) -> None:
+        """Visulize the mission
+        """
+        
+        # my own trajectory
+        plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
+
+        # plot the partner robot trajectory
+        for robot in self.partner_robot_state_estimates.keys():
+            temp = []
+            for frame in sorted(self.partner_robot_state_estimates[robot].keys()):
+                pose = self.partner_robot_state_estimates[robot][frame]
+                temp.append([pose.y(),pose.x()])
+            temp = np.array(temp)
+            plt.plot(temp[:,0],temp[:,1])
+
+        plt.axis("square")
+        plt.show()
+
 
 
 
