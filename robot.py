@@ -4,7 +4,7 @@ import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
 
-from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam
+from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points
 
 from loop_closure import LoopClosure
 
@@ -431,13 +431,17 @@ class Robot():
         truth_zero = self.truth[0]
         est_zero = numpy_to_gtsam(self.state_estimate[0])
         truth_in_my_frame = []
-        for row in self.truth:
+        for row in self.truth[:len(self.state_estimate)]:
            between = truth_zero.between(row)
            temp = est_zero.compose(between)
            truth_in_my_frame.append([temp.y(),temp.x()])
         truth_in_my_frame = np.array(truth_in_my_frame)
         plt.plot(truth_in_my_frame[:,0],truth_in_my_frame[:,1],c="black",linestyle='dashed')
 
+        for cloud,pose in zip(self.points,self.state_estimate):
+            cloud = transform_points(cloud,numpy_to_gtsam(pose))
+            plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
+            
         plt.axis("square")
         plt.show()
 
