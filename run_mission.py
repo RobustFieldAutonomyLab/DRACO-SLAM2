@@ -3,7 +3,7 @@ import gtsam
 import numpy as np
 import matplotlib.pyplot as plt
 
-from utils import load_data,search_for_loops,reject_loops,grade_loop_list,plot_loop,keep_best_loop,verify_pcm
+from utils import load_data,search_for_loops,reject_loops,grade_loop_list,plot_loop,keep_best_loop,verify_pcm,flip_loops
 from robot import Robot
 from registration import Registration
 from loop_closure import LoopClosure
@@ -68,10 +68,13 @@ for slam_step in range(63):
                 # if we have a valid solution from PCM, merge the graphs
                 if len(valid_loops) > 0:
                     robots[robot_id_source].merge_slam(valid_loops)
+                    flipped_valid_loops = flip_loops(valid_loops)
+                    robots[robot_id_target].merge_slam(flipped_valid_loops)
                     
                 for valid in valid_loops: 
                     loop_list.append(valid)
                     robots[robot_id_source].plot()
+                    # robots[robot_id_target].plot()
                     
 for robot in robots.keys():
     robots[robot].plot()

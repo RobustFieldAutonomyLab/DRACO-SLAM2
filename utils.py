@@ -587,8 +587,31 @@ def robot_to_symbol(robot_id:int,keyframe_id:int) -> gtsam.symbol:
     
     letters = {1:"a",2:"b",3:"c",4:"d"} # lookup table for robot symbols 
     return gtsam.symbol(letters[robot_id],keyframe_id)
-    
 
+def flip_loops(loops:list) -> list:
+    """Invert a loop closure list so it can be transmited to another robot. 
+
+    Args:
+        loops (list): the list of loop closures I found
+
+    Returns:
+        list: the same loop closures inverted so you can add them to your graph
+    """
+    
+    loops_out = []
+    for loop in loops:
+        target_key = loop.source_key
+        source_key = loop.target_key
+        estimated_transform = loop.estimated_transform.inverse()
+        target_pose_their_frame = gtsam_to_numpy(loop.source_pose)
+        loop_fliped = LoopClosure(source_key,target_key,None,None,None,None,target_pose_their_frame)
+        loop_fliped.target_robot_id = loop.source_robot_id
+        loop_fliped.source_robot_id = loop.target_robot_id
+        loop_fliped.estimated_transform = estimated_transform
+        loop_fliped.target_pose = loop.target_pose_their_frame.compose(estimated_transform)
+        loops_out.append(loop_fliped)
+
+    return loops_out
 
 
 

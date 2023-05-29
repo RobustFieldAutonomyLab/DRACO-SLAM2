@@ -236,7 +236,6 @@ class Robot():
             if self.pcm_dict[robot_id][i].inserted == False:
                 self.pcm_dict[robot_id][i].inserted = True
                 valid_loops.append(self.pcm_dict[robot_id][i])
-        self.inter_robot_loop_closures += valid_loops
         return valid_loops
     
     def check_for_data(self, robot_id:int, keyframe_id:int) -> Tuple[list,int]:
@@ -376,7 +375,7 @@ class Robot():
         Args:
             loop_closures (list): A list of multi-robot loop closures
         """
-        
+
         for loop in loop_closures:
             
             # parse some info
@@ -407,6 +406,7 @@ class Robot():
             self.partner_reference_frames[loop.target_robot_id] = loop.target_pose.compose(
                                                                         loop.target_pose_their_frame.inverse())
         
+        self.inter_robot_loop_closures += loop_closures
         self.update_graph() # upate the graph with the new info
 
     def update_partner_trajectory(self,robot_id:int,trajectory:np.array) -> None:
@@ -453,6 +453,7 @@ class Robot():
 
         for loop in self.inter_robot_loop_closures:
             one = numpy_to_gtsam(self.state_estimate[loop.source_key])
+            if loop.target_key >= len(self.partner_robot_state_estimates[loop.target_robot_id]): continue
             two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
 
