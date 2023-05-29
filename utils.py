@@ -391,12 +391,14 @@ def keep_best_loop(loops:list) -> LoopClosure:
     """
     
     scores = []
+    loops_copy = []
     for loop in loops: 
-        if loop is not None and loop.status:
+        if loop.status:
             scores.append(loop.overlap)
+            loops_copy.append(loop)
 
     if len(scores) > 0:
-        return loops[np.argmax(scores)], True
+        return loops_copy[np.argmax(scores)], True
     else:
         return None, False
 
