@@ -426,6 +426,7 @@ class Robot():
         
         # my own trajectory
         plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
+        plt.title("ROBOT: " + str(self.robot_id))
 
         # plot the partner robot trajectory
         for robot in self.partner_robot_state_estimates.keys():
