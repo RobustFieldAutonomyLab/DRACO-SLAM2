@@ -69,6 +69,7 @@ for slam_step in range(63):
                 if len(valid_loops) > 0:
                     robots[robot_id_source].merge_slam(valid_loops)
                     flipped_valid_loops = flip_loops(valid_loops)
+                    for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
                     robots[robot_id_target].merge_slam(flipped_valid_loops)
                     
                 for valid in valid_loops: 
