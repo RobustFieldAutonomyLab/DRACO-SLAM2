@@ -287,7 +287,8 @@ def get_all_context(poses : list,
         context.append(context_img)
     return keys, context
 
-def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,MAX_TREE_DIST:int,KNN:int) -> list:
+def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,
+                     MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float,MAX_TREE_DIST:int,KNN:int) -> list:
     """Search for loops between the most recent frame in robot_id_source and all the frames in robot_id_target. 
     Apply ICP between any possible loop closures. We package these loop closures and return them as a list.
 
@@ -297,6 +298,9 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
         robots (dict): a dictionary of Robot objects, this contains all robot data
         robot_id_source (int): the id number of the source robot, like a vin number
         robot_id_target (int): the id number of the target root, like a vin number
+        MIN_POINTS (int): the min number of points in both clouds to try registration
+        RATIO_POINTS (int): the ratio between the point clouds to try registration
+        MIN_OVERLAP (float): the minimum overlap between the points after global init ICP
         MAX_TREE_DIST (int): the max distance allowed in feature space when doing kdsearch
         KNN (int): the number of neighbors we want when doing kd search
 
@@ -336,7 +340,7 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                                target_pose_their_frame,
                                true_source=robots[robot_id_source].truth[ring_key_index],
                                true_target=robots[robot_id_target].truth[j]) 
-            loop_out = reg.evaluate(loop,10, -1,-1, -1)
+            loop_out = reg.evaluate(loop,MIN_POINTS, RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
 
@@ -385,10 +389,16 @@ def keep_best_loop(loops:list) -> LoopClosure:
     Returns:
         LoopClosure: the loopclosure with the highest overlap
     """
-
+    
     scores = []
-    for loop in loops: scores.append(loop.overlap)
-    return loops[np.argmax(scores)]
+    for loop in loops: 
+        if loop is not None and loop.status:
+            scores.append(loop.overlap)
+
+    if len(scores) > 0:
+        return loops[np.argmax(scores)], True
+    else:
+        return None, False
 
 def plot_loop(loop:LoopClosure) -> None:
     """Plot a loop closure using matplotlib

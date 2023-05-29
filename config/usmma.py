@@ -14,7 +14,7 @@ tolerance = .01
 max_translation = 10
 max_rotation = np.radians(100.)
 
-min_points = 75
-ratio_points = 2.0         
-context_difference = 100
-min_overlap = 0.65
+MIN_POINTS = 75
+RATIO_POINTS = 2.0         
+CONTEXT_DIFFERENCE = 100
+MIN_OVERLAP = 0.65

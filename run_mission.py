@@ -35,6 +35,8 @@ comm_link = CommLink()
 for slam_step in range(63):
     print(slam_step)
 
+    if slam_step < 10: continue
+
     # step the robots forward
     for robot_id in robots.keys():
         robots[robot_id].step()
@@ -47,12 +49,14 @@ for slam_step in range(63):
             robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
 
             if robot_id_target == robot_id_source: continue # do not search with self
-            loops = search_for_loops(reg,robots,comm_link,robot_id_source,robot_id_target,MAX_TREE_DIST,KNN)
-            loops = reject_loops(loops,min_points,ratio_points,context_difference,min_overlap)
-            loops = grade_loop_list(loops,max_correct_distance,max_correct_rotation)
+            loops = search_for_loops(reg,robots,comm_link,robot_id_source,robot_id_target,
+                                     MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN)
+            # loops = reject_loops(loops,MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
+            # loops = grade_loop_list(loops,max_correct_distance,max_correct_rotation)
 
             if len(loops) == 0: continue
-            loop_ = keep_best_loop(loops)
+            loop_, loop_search_status = keep_best_loop(loops)
+            if loop_search_status == False: continue # make sure the best loop not outlier
             loop_.place_loop(robots[robot_id_source].get_pose_gtsam())
             loop_.source_robot_id = robot_id_source
             loop_.target_robot_id = robot_id_target
@@ -68,8 +72,7 @@ for slam_step in range(63):
                 for valid in valid_loops: 
                     loop_list.append(valid)
                     robots[robot_id_source].plot()
-
-
+                    
 for robot in robots.keys():
     robots[robot].plot()
 
