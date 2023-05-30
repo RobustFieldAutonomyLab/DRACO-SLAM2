@@ -73,9 +73,6 @@ for slam_step in range(63):
             loop_.source_robot_id = robot_id_source
             loop_.target_robot_id = robot_id_target
 
-            # perform some more advanced loop closure search here
-            robots[robot_id_source].search_for_possible_loops()
-
             # check the status of the loop closure
             if loop_.status:
                 

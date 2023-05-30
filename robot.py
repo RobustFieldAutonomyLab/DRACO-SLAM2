@@ -88,6 +88,7 @@ class Robot():
             self.update_graph()
         self.slam_step += 1
         self.add_factors()
+        self.search_for_possible_loops()
         self.update_graph()
 
     def start_graph(self) -> None:
