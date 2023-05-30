@@ -412,16 +412,31 @@ class Robot():
         self.inter_robot_loop_closures += loop_closures
         self.update_graph() # upate the graph with the new info
 
-    def update_partner_trajectory(self,robot_id:int,trajectory:np.array) -> None:
+    def update_partner_trajectory(self,robot_id:int,trajectory:np.array) -> int:
         """Update the trajectory. This is from the other robot performing SLAM.
         This update is performed by one robot sending it's trajctory to another. 
 
         Args:
             robot_id (int): the id of the robot
             trajectory (np.array): the trajectory from the robot
+
+        Returns:
+            int: comms cost of sending this data, return 0 if it is not sent
         """
 
-        self.partner_robot_trajectories[robot_id] = trajectory
+        # check if we actually need to communicate this information
+        flag = False
+        for i, row in enumerate(trajectory):
+            pose = numpy_to_gtsam(row)
+            if robot_id in self.partner_robot_trajectories and i < len(self.partner_robot_trajectories[robot_id]):
+                pose_two = numpy_to_gtsam(self.partner_robot_trajectories[robot_id][i])
+                pose_between = pose.between(pose_two)
+                if np.sqrt(pose_between.x()**2 + pose_between.y()**2) > 0.1 or np.degrees(pose_between.theta()) > 3.0:
+                    flag = True
+
+        self.partner_robot_trajectories[robot_id] = trajectory # pass through the info
+        if flag: return len(trajectory) * 2 * 32 # return the cost if we actually need to send it
+        else: return 0
         
     def search_for_possible_loops(self):
         """Check for possible loop closures between robots.
