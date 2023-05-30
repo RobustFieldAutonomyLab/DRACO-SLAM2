@@ -4,7 +4,7 @@ import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
 
-from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points
+from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points, check_frame_for_overlap
 
 from loop_closure import LoopClosure
 
@@ -56,6 +56,8 @@ class Robot():
         self.inter_robot_loop_closures = []
 
         self.point_clouds_received = {} # log when we have gotten a point cloud. Format: robot_id_number, keyframe_id
+
+        self.possible_loops = {}
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -420,6 +422,25 @@ class Robot():
 
         self.partner_robot_trajectories[robot_id] = trajectory
         
+    def search_for_possible_loops(self):
+        """Check for possible loop closures between robots.
+        """
+                
+        for j, (cloud, pose) in enumerate(zip(self.points,self.state_estimate)):
+            pose = numpy_to_gtsam(pose)
+            cloud = transform_points(cloud,pose) # place the cloud based on the most recent estimate
+            for robot in self.partner_robot_state_estimates: 
+                for i in self.partner_robot_state_estimates[robot]:
+                    if (j,robot,i) in self.possible_loops: continue # check if we have a possible here already
+                    # check if there is a possible loop between
+                    # my pose i and partner robots jth pose
+                    status = check_frame_for_overlap(cloud,
+                                                     pose,
+                                                     self.partner_robot_state_estimates[robot][i],
+                                                     30)
+                    if status: #if so log it
+                        self.possible_loops[(j,robot,i)] = True
+                        
     def plot(self) -> None:
         """Visulize the mission
         """
@@ -456,6 +477,15 @@ class Robot():
             if loop.target_key >= len(self.partner_robot_state_estimates[loop.target_robot_id]): continue
             two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
+
+        for loop in self.possible_loops:
+            i, r, j = loop
+            if i >= len(self.state_estimate): continue
+            one = numpy_to_gtsam(self.state_estimate[i])
+            if j >= len(self.partner_robot_state_estimates[r]): continue
+            two = self.partner_robot_state_estimates[r][j]
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+
 
         plt.axis("square")
         plt.show()

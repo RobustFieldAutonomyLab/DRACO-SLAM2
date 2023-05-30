@@ -543,16 +543,16 @@ def check_frame_for_overlap(source_points:np.array,source_pose:gtsam.Pose2,targe
     """
 
     # transform the points and parse the frame
-    source_points_transformed = transform_points(source_points,source_pose)
     x,y,theta = target_pose.x(), target_pose.y(), target_pose.theta()
     
     # get the range and bearing relative to the target pose
-    r = np.sqrt((x - source_points_transformed[:,0])**2 + (y - source_points_transformed[:,1])**2)
-    b = np.degrees(np.arctan2(y - source_points_transformed[:,1],
-                              x - source_points_transformed[:,0]))
+    r = np.sqrt((x - source_points[:,0])**2 + (y - source_points[:,1])**2)
+    b = np.degrees(np.arctan2(y - source_points[:,1],
+                              x - source_points[:,0]))
     
     # filter the points based on sensor range
     source_points = source_points[r <= 30]
+    b = b[r <= 30]
 
     # filter based on sensor bearing, max left and right angle
     yaw = 180 + np.degrees(theta)
