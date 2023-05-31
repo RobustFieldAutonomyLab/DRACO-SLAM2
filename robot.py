@@ -3,6 +3,7 @@ from typing import Tuple
 import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
+import time
 
 from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points, check_frame_for_overlap
 
@@ -42,6 +43,7 @@ class Robot():
         self.values_added = {}
         self.isam_params = gtsam.ISAM2Params()
         self.isam = gtsam.ISAM2(self.isam_params)
+        self.isam_combined = None
         self.state_estimate = [] # my own state estimate
         self.covariance = []
         self.partner_robot_state_estimates = {} # my estimates about the other robots
@@ -58,6 +60,7 @@ class Robot():
         self.point_clouds_received = {} # log when we have gotten a point cloud. Format: robot_id_number, keyframe_id
 
         self.possible_loops = {}
+        self.best_possible_loops = []
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -90,6 +93,7 @@ class Robot():
         self.add_factors()
         self.search_for_possible_loops()
         self.update_graph()
+        self.simulate_loop_closure()
 
     def start_graph(self) -> None:
         """Start the SLAM graph by inserting the prior.
@@ -298,6 +302,7 @@ class Robot():
         # add and update the partner robot trajectories
         for robot in self.partner_robot_state_estimates.keys():
             isam = self.merge_trajectory(isam,robot)
+        self.isam_combined = isam
 
         # update the state estimate
         values = isam.calculateEstimate()
@@ -456,7 +461,55 @@ class Robot():
                                                      30)
                     if status: #if so log it
                         self.possible_loops[(j,robot,i)] = True
-                        
+
+    def simulate_loop_closure(self):
+        
+        # copy of isam combined
+        isam = gtsam.ISAM2(self.isam_combined)
+        graph = gtsam.NonlinearFactorGraph()
+        values = gtsam.Values()
+
+        i = 0 # counter
+        start_time = time.time() # timer
+        ratio_list = []
+        loop_list = []
+        for (source_key, target_robot_id, target_key) in self.possible_loops:
+            i += 1
+
+            # get the covariance at this pose before we insert the hypothetical loop closure
+            cov_before = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
+
+            # get the transform and package it
+            one = numpy_to_gtsam(self.state_estimate[source_key])
+            two = self.partner_robot_state_estimates[target_robot_id][target_key]
+            pose_between = one.between(two)
+            factor = gtsam.BetweenFactorPose2(X(source_key),
+                                                robot_to_symbol(target_robot_id,target_key),
+                                                pose_between,
+                                                self.prior_model) # TODO update noise model
+            # insert and update isam 
+            graph.add(factor)
+            isam.update(graph, values)
+            graph.resize(0)  # clear the graph and values once we push it to ISAM2
+            values.clear()
+
+            # get the covariance at this pose after we add the loop closure
+            cov_after = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
+
+            # get the ratio of the determinants to grade the impact of this loop closure
+            ratio = np.linalg.det(cov_after) / np.linalg.det(cov_before)
+            ratio_list.append(ratio)
+            loop_list.append([source_key,target_robot_id,target_key])
+
+        ind = np.argpartition(ratio_list, 4)[:4]
+        self.best_possible_loops = []
+        if len(ind) > 0 : 
+            for index in ind:
+                self.best_possible_loops.append(loop_list[index])
+        print("Tested N Loops: ", i, " Runtime: ", time.time() - start_time)
+
+
+             
     def plot(self) -> None:
         """Visulize the mission
         """
@@ -495,6 +548,14 @@ class Robot():
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
 
         for loop in self.possible_loops:
+            i, r, j = loop
+            if i >= len(self.state_estimate): continue
+            one = numpy_to_gtsam(self.state_estimate[i])
+            if j >= len(self.partner_robot_state_estimates[r]): continue
+            two = self.partner_robot_state_estimates[r][j]
+            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+
+        for loop in self.best_possible_loops:
             i, r, j = loop
             if i >= len(self.state_estimate): continue
             one = numpy_to_gtsam(self.state_estimate[i])
