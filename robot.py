@@ -463,6 +463,9 @@ class Robot():
                         self.possible_loops[(j,robot,i)] = True
 
     def simulate_loop_closure(self):
+        """Simulate the impact of the possible loop closures in self.possible loops. 
+        Log the best K loop closures. 
+        """
         
         # copy of isam combined
         isam = gtsam.ISAM2(self.isam_combined)
@@ -507,8 +510,6 @@ class Robot():
             for index in ind:
                 self.best_possible_loops.append(loop_list[index])
         print("Tested N Loops: ", i, " Runtime: ", time.time() - start_time)
-
-
              
     def plot(self) -> None:
         """Visulize the mission
