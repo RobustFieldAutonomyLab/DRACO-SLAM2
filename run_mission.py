@@ -47,7 +47,7 @@ for slam_step in range(63):
         for robot_id_target in robots.keys():
             if robot_id_target == robot_id_source: continue # do not search with self
 
-            # Account for comms cost here
+            # Update the partner trajectory and account for comms
             state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
             comm_link.log_message(state_cost)
 
