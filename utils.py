@@ -314,6 +314,7 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
     tree = robots[robot_id_target].get_tree() # get the tree we want to search against           
     distances, indexes = tree.query(ring_key,k=KNN,distance_upper_bound=MAX_TREE_DIST) # search
 
+    # TODO check if we need submap size here
     source_points = robots[robot_id_source].get_robot_points(ring_key_index,1) # pull the cloud at source
     source_context = robots[robot_id_source].get_context() # pull the context image at source   
 
@@ -612,7 +613,3 @@ def flip_loops(loops:list) -> list:
         loops_out.append(loop_fliped)
 
     return loops_out
-
-
-
-
