@@ -63,6 +63,10 @@ class Robot():
 
         self.possible_loops = {}
         self.best_possible_loops = []
+
+        self.mse = None
+        self.rmse = None
+        self.team_uncertainty = []
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -556,11 +560,50 @@ class Robot():
         if len(ind) > 0 : 
             for index in ind:
                 self.best_possible_loops.append(loop_list[index])
-        print("Tested N Loops: ", i, " Runtime: ", time.time() - start_time)
+        # print("Tested N Loops: ", i, " Runtime: ", time.time() - start_time)
              
+    def run_metrics(self) -> None:
+        """Generate some metrics
+        """
+
+        euclidan_error = []
+        rotational_error = []
+
+        # euclidian error and rotation
+        truth_ref_frame = self.truth[0] 
+        for pose_est, pose_true in zip(self.state_estimate,self.truth):
+            pose_est = numpy_to_gtsam(pose_est)
+            pose_true = truth_ref_frame.between(pose_true)
+            diff = pose_est.between(pose_true)
+            euclidan_error.append(np.sqrt(diff.x()**2 + diff.y()**2))
+            rotational_error.append(np.degrees(diff.theta()))
+        euclidan_error = np.array(euclidan_error)
+        rotational_error = np.array(rotational_error)
+        self.mse = np.mean(euclidan_error)
+        self.rmse = np.sqrt(np.mean(euclidan_error**2))
+
+        # uncertainty
+        team_uncertainty = {}
+        for robot in self.partner_robot_state_estimates.keys():
+            temp = []
+            counter = []
+            for i in range(len(self.partner_robot_covariance[robot])):
+                temp.append(np.linalg.det(self.partner_robot_covariance[robot][i]))
+                counter.append(i)
+            team_uncertainty[robot] = (counter,temp)
+
+            print("list: ",len(temp))
+        self.team_uncertainty = team_uncertainty
+
     def plot(self) -> None:
         """Visulize the mission
         """
+
+        self.run_metrics()
+
+        for robot in self.team_uncertainty:
+            plt.plot(self.team_uncertainty[robot][0],self.team_uncertainty[robot][1])
+        plt.show()
         
         # my own trajectory
         plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
