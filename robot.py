@@ -51,6 +51,8 @@ class Robot():
         self.partner_reference_frames = {} # my estimate of where I think the this other robot started
         self.multi_robot_frames = {} # the frames I have added as loop closures from other robots
         self.partner_robot_covariance = {}
+        self.partner_robot_exchange_costs = {}
+        self.my_exchange_costs = None
 
         self.prior_sigmas = [0.1, 0.1, 0.01]
         self.prior_model = self.create_noise_model(self.prior_sigmas)
@@ -462,6 +464,43 @@ class Robot():
                     if status: #if so log it
                         self.possible_loops[(j,robot,i)] = True
 
+    def pass_data_cost(self) -> list:
+        """Pass the cost of my most recent point cloud to 
+        the rest of my team. 
+
+        Returns:
+            list: tthe costs of my point clouds up to now
+        """
+
+        if self.my_exchange_costs is None:
+            self.my_exchange_costs = []
+            for row in self.points:
+                self.my_exchange_costs.append(len(row) * 2 * 32)
+        return self.my_exchange_costs[:self.slam_step+1]
+    
+    def update_partner_costs(self,robot_id:int, comms_cost:list):
+        """Update the cost of exchangeing a point cloud
+
+        Args:
+            robot_id (int): the robot id 
+            comms_cost (int): the cost to exchange this keyframe
+        """
+
+        self.partner_robot_exchange_costs[robot_id] = comms_cost
+
+        # get the max comms cost we have ever seen. Look at ours, and what we have been sent
+        max_list = []
+        for robot in self.partner_robot_exchange_costs.keys():
+            max_list.append(np.max(self.partner_robot_exchange_costs[robot]))
+        if self.my_exchange_costs is not None:
+            max_list.append(np.max(self.my_exchange_costs))
+
+        # normalize the comms costs using the max, assuming the min would be zero
+        max_val = np.max(max_list)
+        for robot in self.partner_robot_exchange_costs.keys():
+            self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
+
+
     def simulate_loop_closure(self):
         """Simulate the impact of the possible loop closures in self.possible loops. 
         Log the best K loop closures. 
@@ -498,6 +537,14 @@ class Robot():
 
             # get the covariance at this pose after we add the loop closure
             cov_after = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
+
+            '''# get the cost of exchanging the data needed for this loop 
+            # first check if we have the data on hand
+            if (target_robot_id,target_key) in self.point_clouds_received:
+                exchange_cost = 0
+            else:
+                exchange_cost = self.partner_robot_exchange_costs[target_robot_id][target_key]
+                exchange_cost = 0'''
 
             # get the ratio of the determinants to grade the impact of this loop closure
             ratio = np.linalg.det(cov_after) / np.linalg.det(cov_before)
