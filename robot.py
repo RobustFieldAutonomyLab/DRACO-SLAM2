@@ -62,11 +62,13 @@ class Robot():
         self.point_clouds_received = {} # log when we have gotten a point cloud. Format: robot_id_number, keyframe_id
 
         self.possible_loops = {}
-        self.best_possible_loops = []
+        self.best_possible_loops = {}
 
         self.mse = None
         self.rmse = None
         self.team_uncertainty = []
+
+        self.loops_tested = []
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -87,6 +89,20 @@ class Robot():
         """
 
         return gtsam.noiseModel.Gaussian.Covariance(cov)
+    
+    def create_robust_noise_model(self, cov: np.array):
+        """Create a noise model from a numpy array
+
+        Args:
+            cov (np.array): numpy array of the covariance matrix.
+
+        Returns:
+            gtsam.noiseModel_Robust: gtsam version of the input
+        """
+
+        model = gtsam.noiseModel.Gaussian.Covariance(cov)
+        robust = gtsam.noiseModel.mEstimator.Cauchy.Create(1.0)
+        return gtsam.noiseModel.Robust.Create(robust, model)
     
     def step(self) -> None:
         """Increase the step of SLAM
@@ -206,7 +222,7 @@ class Robot():
         Returns:
             gtsam.Pose2: _description_
         """
-    
+        # TODO UPDATE
         if self.slam_step >= len(self.poses_g):return self.poses_g[-1]
         return self.poses_g[self.slam_step]
     
@@ -383,7 +399,7 @@ class Robot():
 
         return isam
         
-    def merge_slam(self,loop_closures:list) -> None:
+    def merge_slam(self,loop_closures:list, robust=False) -> None:
         """Add any multi-robot loop closures. 
 
         Args:
@@ -396,12 +412,15 @@ class Robot():
             source_symbol = X(loop.source_key)
             target_symbol = robot_to_symbol(loop.target_robot_id,loop.target_key)
             noise_model = self.create_noise_model(self.prior_sigmas) #TODO update noise model
+            if robust:
+                noise_model = self.create_robust_noise_model(loop.cov)
 
             # build a factor and add it
             factor = gtsam.BetweenFactorPose2(source_symbol,
                                                 target_symbol,
                                                 loop.estimated_transform,
                                                 noise_model)
+            
             self.graph.add(factor)
             
             # Check if we have ever added a frame from this robot
@@ -464,7 +483,7 @@ class Robot():
                     status = check_frame_for_overlap(cloud,
                                                      pose,
                                                      self.partner_robot_state_estimates[robot][i],
-                                                     30)
+                                                     75)
                     if status: #if so log it
                         self.possible_loops[(j,robot,i)] = True
 
@@ -515,12 +534,10 @@ class Robot():
         graph = gtsam.NonlinearFactorGraph()
         values = gtsam.Values()
 
-        i = 0 # counter
-        start_time = time.time() # timer
         ratio_list = []
         loop_list = []
         for (source_key, target_robot_id, target_key) in self.possible_loops:
-            i += 1
+            if (source_key, target_robot_id, target_key) in self.best_possible_loops: continue
 
             # get the covariance at this pose before we insert the hypothetical loop closure
             cov_before = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
@@ -542,25 +559,18 @@ class Robot():
             # get the covariance at this pose after we add the loop closure
             cov_after = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
 
-            '''# get the cost of exchanging the data needed for this loop 
-            # first check if we have the data on hand
-            if (target_robot_id,target_key) in self.point_clouds_received:
-                exchange_cost = 0
-            else:
-                exchange_cost = self.partner_robot_exchange_costs[target_robot_id][target_key]
-                exchange_cost = 0'''
-
             # get the ratio of the determinants to grade the impact of this loop closure
             ratio = np.linalg.det(cov_after) / np.linalg.det(cov_before)
-            ratio_list.append(ratio)
-            loop_list.append([source_key,target_robot_id,target_key])
+            if ratio <= 0.8:
+                ratio_list.append(ratio)
+                loop_list.append((source_key,target_robot_id,target_key))
 
-        ind = np.argpartition(ratio_list, 4)[:4]
-        self.best_possible_loops = []
-        if len(ind) > 0 : 
-            for index in ind:
-                self.best_possible_loops.append(loop_list[index])
-        # print("Tested N Loops: ", i, " Runtime: ", time.time() - start_time)
+        if len(ratio_list) <= 4: ind = [0,1,2,3]
+        else: ind = np.argpartition(ratio_list, 4)[:4]
+        for index in ind:
+            if index >= len(loop_list): continue
+            if loop_list[index] not in self.best_possible_loops:
+                self.best_possible_loops[loop_list[index]] = False
              
     def run_metrics(self) -> None:
         """Generate some metrics
@@ -581,6 +591,7 @@ class Robot():
         rotational_error = np.array(rotational_error)
         self.mse = np.mean(euclidan_error)
         self.rmse = np.sqrt(np.mean(euclidan_error**2))
+        print(self.mse,self.rmse)
 
         # uncertainty
         team_uncertainty = {}
@@ -603,6 +614,7 @@ class Robot():
 
         for robot in self.team_uncertainty:
             plt.plot(self.team_uncertainty[robot][0],self.team_uncertainty[robot][1])
+        plt.ylim(0,.05)
         plt.show()
         
         # my own trajectory
@@ -638,7 +650,7 @@ class Robot():
             two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
 
-        for loop in self.possible_loops:
+        for loop in self.loops_tested:
             i, r, j = loop
             if i >= len(self.state_estimate): continue
             one = numpy_to_gtsam(self.state_estimate[i])
@@ -652,7 +664,7 @@ class Robot():
             one = numpy_to_gtsam(self.state_estimate[i])
             if j >= len(self.partner_robot_state_estimates[r]): continue
             two = self.partner_robot_state_estimates[r][j]
-            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
 
 
         plt.axis("square")

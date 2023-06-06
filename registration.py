@@ -4,8 +4,10 @@ import numpy as np
 from icp import GI_ICP
 from sklearn.covariance import MinCovDet
 from scipy.spatial.transform import Rotation
-from utils import numpy_to_gtsam, transform_points, rot_to_euler
+from utils import numpy_to_gtsam, transform_points, rot_to_euler, grade_loop
 from loop_closure import LoopClosure
+import time
+import matplotlib.pyplot as plt
 
 class Registration():
     """A class to handle the registration between point clouds
@@ -13,6 +15,7 @@ class Registration():
 
     def __init__(self,sampling_points,iterations,tolerance,max_translation,max_rotation) -> None:
         self.icp = GI_ICP(sampling_points,iterations,tolerance,max_translation,max_rotation)
+        self.icp_two = GI_ICP(100,5,0.01,5,np.radians(30.))
 
     def predict(self,points:np.array,samples:int) -> np.array:
         """Predict the covariance if we call ICP on this point cloud
@@ -61,6 +64,48 @@ class Registration():
         else:
             return None
 
+    def evaluate_with_guess(self,loop:LoopClosure, source_pose) -> LoopClosure:
+        
+
+        # use the global optimizer to init the ICP call
+        init_status, go_icp_result = self.icp_two.initialize(loop.source_points,loop.target_points)
+        if init_status == False:
+            loop.status = False
+            loop.message = "GI Failure"
+            return loop
+        
+        loop.source_points_init = transform_points(loop.source_points,numpy_to_gtsam(go_icp_result.x))
+        loop.gi_transform = numpy_to_gtsam(go_icp_result.x)
+
+        icp_status, icp_transform = self.icp.refine(loop.source_points_init, loop.target_points)
+        loop.reg_points = loop.source_points_init.dot(icp_transform[:2, :2].T) + np.array(
+                                                [icp_transform[0][2], icp_transform[1][2]])
+        loop.icp_transform = gtsam.Pose2(icp_transform[0][2], icp_transform[1][2], rot_to_euler(icp_transform[:2, :2]))
+
+        initial_estimate = loop.source_pose.between(loop.target_pose)
+        updated_estimate = initial_estimate.compose(loop.gi_transform)
+        updated_estimate = updated_estimate.compose(loop.icp_transform)
+        new_target = loop.source_pose.compose(updated_estimate)
+        loop.estimated_transform = loop.source_pose.between(new_target)
+        # loop.estimated_transform = updated_estimate
+        loop.overlap, loop.fit_score = self.icp_two.overlap(loop.reg_points,loop.target_points)
+        loop.cov = np.eye(3) * loop.fit_score * 20.0
+
+        '''plt.scatter(loop.reg_points[:,0],loop.reg_points[:,1])
+        plt.scatter(loop.target_points[:,0],loop.target_points[:,1])
+        plt.axis("square")
+        plt.show()'''
+        
+        return loop
+
+        '''true_between = loop.true_source.between(loop.true_target)
+        test_between = updated_estimate.between(true_between)
+        dist = np.sqrt(test_between.x()**2 + test_between.y()**2)
+        rot = np.degrees(abs(test_between.theta()))
+        overlap = self.icp_two.overlap(loop.reg_points,loop.target_points)'''
+
+
+        
     def evaluate(self,loop:LoopClosure,
                  min_points:int, ratio_points:float, 
                  context_difference:int, min_overlap:float) -> LoopClosure:
@@ -76,6 +121,8 @@ class Registration():
         Returns:
             LoopClosure: the loop closure object, post evaluation
         """
+
+        start_time = time.time()
 
         # 1. check the count
         loop.count = (len(loop.source_points), len(loop.target_points))
@@ -143,4 +190,5 @@ class Registration():
                         + " Ratio: " + str(loop.ratio) 
                         + " Context Diff: " + str(loop.context_diff) 
                         + " Overlap: " + str(overlap))
+        print(time.time()-start_time)
         return loop

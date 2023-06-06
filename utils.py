@@ -145,6 +145,7 @@ def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_dista
     differnce = true_between.between(icp_result) # compare them 
     distance = np.sqrt(differnce.x()**2 + differnce.y()**2)
     rotation = abs(differnce.theta())
+    print(distance,rotation)
     return max_distance > distance and max_rotation > rotation, differnce
 
 def grade_loop_list(loops:list,max_correct_distance:float,max_correct_rotation:float) -> list:
@@ -287,6 +288,77 @@ def get_all_context(poses : list,
         context.append(context_img)
     return keys, context
 
+def search_for_loops_with_prior(reg,robots:dict,comm_link,robot_id_source:int) -> list:
+    
+    loops = []
+    for (source_frame, robot_id_target, target_frame) in robots[robot_id_source].best_possible_loops:
+        
+        # only evaluate the possible loop once
+        if robots[robot_id_source].best_possible_loops[(source_frame, robot_id_target, target_frame)] == True:
+            continue
+        else:
+            robots[robot_id_source].best_possible_loops[(source_frame, robot_id_target, target_frame)] = True
+
+        # check for the data. If required get the data, log all comms costs
+        required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target,target_frame)
+        comm_link.log_message(comms_cost_request)
+        comms_cost_point_clouds = robots[robot_id_target].get_data(required_data)
+        comm_link.log_message(comms_cost_point_clouds)
+
+        # pull the points and state estimate
+        # TODO SUBMAP SIZE
+        source_points = robots[robot_id_source].get_robot_points(source_frame,1) 
+        target_points = robots[robot_id_target].get_robot_points(target_frame,1)
+        target_pose_their_frame = robots[robot_id_target].state_estimate[target_frame]
+
+        # pull the initial guess
+        one = numpy_to_gtsam(robots[robot_id_source].state_estimate[source_frame])
+        two = robots[robot_id_source].partner_robot_state_estimates[robot_id_target][target_frame]
+        source_points = transform_points(source_points,one)
+        target_points = transform_points(target_points, two)
+
+        true_base = robots[robot_id_source].truth[0]
+        true_one = robots[robot_id_source].truth[source_frame]
+        true_two = robots[robot_id_target].truth[target_frame]
+        # true_one = true_base.between(true_one)
+        # true_two = true_base.between(true_two)
+
+        # compute the loop closure
+        loop = LoopClosure(source_frame,
+                               target_frame,
+                               source_points,
+                               target_points,
+                               None,
+                               None,
+                               target_pose_their_frame,
+                               true_source=true_one,
+                               true_target=true_two) 
+        loop.source_pose = one
+        loop.target_pose = two
+        loop.source_robot_id = robot_id_source
+        loop.target_robot_id = robot_id_target
+        
+        loop = reg.evaluate_with_guess(loop,one)
+
+        # do some more basic outlier rejection
+        if loop.overlap >= 0.5:
+            loops.append(loop)
+
+    return loops
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,
                      MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float,MAX_TREE_DIST:int,KNN:int) -> list:
     """Search for loops between the most recent frame in robot_id_source and all the frames in robot_id_target. 
@@ -319,9 +391,19 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
     source_context = robots[robot_id_source].get_context() # pull the context image at source   
 
     indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
+
     for j in indexes: # loop over the matches from the tree search
         if j < robots[robot_id_target].total_steps: # protect for out of range
-            
+            if robot_id_target in robots[robot_id_source].partner_robot_state_estimates:
+                if j in robots[robot_id_source].partner_robot_state_estimates[robot_id_target]:
+                    test_pose_source = numpy_to_gtsam(robots[robot_id_source].state_estimate[ring_key_index])
+                    test_pose_target = robots[robot_id_source].partner_robot_state_estimates[robot_id_target][j]
+                    test_pose = test_pose_source.between(test_pose_target)
+                    dist = np.sqrt(test_pose.x()**2 + test_pose.y()**2)
+                    rot = np.degrees(abs(test_pose.theta()))
+                    if dist > 10 or rot > 60:
+                        continue
+
             # log the comms cost
             required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target,j)
             comm_link.log_message(comms_cost_request)
@@ -342,8 +424,10 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                                true_source=robots[robot_id_source].truth[ring_key_index],
                                true_target=robots[robot_id_target].truth[j]) 
             loop_out = reg.evaluate(loop,MIN_POINTS, RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
+            robots[robot_id_source].loops_tested.append((ring_key_index,robot_id_target,j))
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
+                
 
     return loop_list
 
@@ -556,7 +640,7 @@ def check_frame_for_overlap(source_points:np.array,source_pose:gtsam.Pose2,targe
     b = b[r <= 30]
 
     # filter based on sensor bearing, max left and right angle
-    yaw = 180 + np.degrees(theta)
+    yaw = -180 + np.degrees(theta)
     yaw_min = yaw - 65.
     yaw_max = yaw + 65.
     source_points = source_points[(b <= yaw_max) & (b >= yaw_min)]
