@@ -123,7 +123,7 @@ class Robot():
         self.find_poses_needing_loops()
         self.search_for_possible_loops()
         self.update_graph()
-        # self.simulate_loop_closure()
+        self.simulate_loop_closure()
         self.animate_step()
 
     def start_graph(self) -> None:
@@ -545,16 +545,18 @@ class Robot():
         """Simulate the impact of the possible loop closures in self.possible loops. 
         Log the best K loop closures. 
         """
-        
-        # copy of isam combined
-        isam = gtsam.ISAM2(self.isam_combined)
+
         graph = gtsam.NonlinearFactorGraph()
         values = gtsam.Values()
-
         ratio_list = []
         loop_list = []
         for (source_key, target_robot_id, target_key) in self.possible_loops:
-            if (source_key, target_robot_id, target_key) in self.best_possible_loops: continue
+            
+            # copy of isam combined
+
+            isam = gtsam.ISAM2(self.isam_combined)
+        
+            # if (source_key, target_robot_id, target_key) in self.best_possible_loops: continue
 
             # get the covariance at this pose before we insert the hypothetical loop closure
             cov_before = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
@@ -578,10 +580,10 @@ class Robot():
 
             # get the ratio of the determinants to grade the impact of this loop closure
             ratio = np.linalg.det(cov_after) / np.linalg.det(cov_before)
-            if ratio <= 0.8:
-                ratio_list.append(ratio)
-                loop_list.append((source_key,target_robot_id,target_key))
+            ratio_list.append(ratio)
+            loop_list.append((source_key,target_robot_id,target_key))
 
+        self.best_possible_loops = {}
         if len(ratio_list) <= 4: ind = [0,1,2,3]
         else: ind = np.argpartition(ratio_list, 4)[:4]
         for index in ind:
@@ -664,7 +666,7 @@ class Robot():
                 cloud = transform_points(cloud,numpy_to_gtsam(pose))
                 plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
 
-        for loop in self.possible_loops:
+        for loop in self.best_possible_loops:
             i, r, j = loop
             if i >= len(self.state_estimate): continue
             one = numpy_to_gtsam(self.state_estimate[i])
