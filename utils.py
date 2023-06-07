@@ -145,7 +145,6 @@ def grade_loop(loop_out:LoopClosure, one:gtsam.Pose2, two:gtsam.Pose2, max_dista
     differnce = true_between.between(icp_result) # compare them 
     distance = np.sqrt(differnce.x()**2 + differnce.y()**2)
     rotation = abs(differnce.theta())
-    print(distance,rotation)
     return max_distance > distance and max_rotation > rotation, differnce
 
 def grade_loop_list(loops:list,max_correct_distance:float,max_correct_rotation:float) -> list:
@@ -346,18 +345,48 @@ def search_for_loops_with_prior(reg,robots:dict,comm_link,robot_id_source:int) -
 
     return loops
 
+def do_loops(reg,robots:dict,comm_link,robot_id_source:int,
+             MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float) -> list:
+    
+    loops = []
+    for (source_key,robot_id_target,target_key) in robots[robot_id_source].best_possible_loops:
+        # only test each combo once
+        if (source_key,robot_id_target,target_key) in robots[robot_id_source].loops_tested: continue
+        robots[robot_id_source].loops_tested[(source_key,robot_id_target,target_key)] = True
+        
+        source_points = robots[robot_id_source].get_robot_points(source_key,1) # pull the cloud at source
+        source_context = robots[robot_id_source].get_context() # pull the context image at source
 
+        # log the comms cost
+        required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target,target_key)
+        comm_link.log_message(comms_cost_request)
+        comms_cost_point_clouds = robots[robot_id_target].get_data(required_data)
+        comm_link.log_message(comms_cost_point_clouds)
 
-
-
-
-
-
-
-
-
-
-
+        target_points = robots[robot_id_target].get_robot_points(target_key,1) # pull the cloud at target
+        target_context = robots[robot_id_target].get_context_index(target_key) # pull the context image at target
+        target_pose_their_frame = robots[robot_id_target].state_estimate[target_key] # the target robots jth pose in it's own ref frame
+        
+        # package a loop closure
+        loop = LoopClosure(source_key,
+                            target_key,
+                            source_points,
+                            target_points,
+                            source_context,
+                            target_context,
+                            target_pose_their_frame,
+                            true_source=robots[robot_id_source].truth[source_key],
+                            true_target=robots[robot_id_target].truth[target_key]) 
+        
+        # evaluate the loop closure
+        loop_out = reg.evaluate(loop,MIN_POINTS, -1,-1,-1)
+        print(loop_out.status,loop.message)
+        if loop_out.icp_transform is not None:
+            loop_out.place_loop(robots[robot_id_source].get_pose_gtsam())
+            loop_out.source_robot_id = robot_id_source
+            loop_out.target_robot_id = robot_id_target
+            plot_loop(loop_out)
+        
 
 def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,
                      MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float,MAX_TREE_DIST:int,KNN:int) -> list:
@@ -424,11 +453,9 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                                true_source=robots[robot_id_source].truth[ring_key_index],
                                true_target=robots[robot_id_target].truth[j]) 
             loop_out = reg.evaluate(loop,MIN_POINTS, RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
-            robots[robot_id_source].loops_tested.append((ring_key_index,robot_id_target,j))
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
                 
-
     return loop_list
 
 def reject_loops(loops:list,min_points:int,ratio_points:float,context_difference:int,min_overlap:float) -> list:
@@ -494,7 +521,6 @@ def plot_loop(loop:LoopClosure) -> None:
         loop (LoopClosure): the loop closure we want to vis
     """
 
-    print(loop.overlap  )
     fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(15, 15))
     '''ax1.scatter(loop.reg_points[:,0],loop.reg_points[:,1],c="blue")
     ax1.scatter(loop.target_points[:,0],loop.target_points[:,1],c="red")'''
@@ -640,7 +666,7 @@ def check_frame_for_overlap(source_points:np.array,source_pose:gtsam.Pose2,targe
     b = b[r <= 30]
 
     # filter based on sensor bearing, max left and right angle
-    yaw = -180 + np.degrees(theta)
+    yaw = 180 + np.degrees(theta)
     yaw_min = yaw - 65.
     yaw_max = yaw + 65.
     source_points = source_points[(b <= yaw_max) & (b >= yaw_min)]
@@ -697,3 +723,29 @@ def flip_loops(loops:list) -> list:
         loops_out.append(loop_fliped)
 
     return loops_out
+
+def create_full_cloud() -> np.array:
+
+
+    max_range = 30
+    max_bearing = 65 + 90
+    min_bearing = -65 + 90
+    range_res = max_range / 512.
+    bearing_res = 130. / 512
+
+    arr = []
+    b = min_bearing
+    while b < max_bearing:
+        r = 0.
+        while r < max_range:
+            b_rad = np.deg2rad(b)
+            x = r * np.sin(b_rad)
+            y = r * np.cos(b_rad)
+            arr.append([x,y])
+            r += range_res
+        b += bearing_res
+            
+    return np.array(arr)
+
+
+
