@@ -14,7 +14,7 @@ from config.usmma import *
 def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
         MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN):
-
+    
     # define a registration system
     reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
 
@@ -46,6 +46,8 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
         for robot_id_source in robots.keys():
             for robot_id_target in robots.keys():
                 if robot_id_target == robot_id_source: continue # do not search with self
+
+                robots[robot_id_source].points_partner[robot_id_target] = robots[robot_id_target].points
 
                 # Update the partner trajectory and account for comms
                 state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
@@ -101,10 +103,10 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                             # robots[robot_id_target].plot()
                         
     # plot each of the robots
-    for robot in robots.keys():
-        robots[robot].plot()
+    #for robot in robots.keys():
+    #    robots[robot].plot()
 
-    comm_link.plot()
+    #comm_link.plot()
 
 run(sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,

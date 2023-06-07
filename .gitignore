@@ -3,3 +3,4 @@ __pycache__/*
 .ipynb_checkpoints/*
 /old_notebooks/*
 /config/__pycache__/*
+animate/*

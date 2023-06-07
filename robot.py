@@ -5,7 +5,7 @@ import gtsam
 import matplotlib.pyplot as plt
 import time
 
-from utils import get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points, check_frame_for_overlap
+from utils import create_full_cloud,get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points, check_frame_for_overlap
 
 from loop_closure import LoopClosure
 
@@ -23,6 +23,8 @@ class Robot():
         self.points_t = data["points_t"] # transformed points at each pose
         self.truth = data["truth"] # ground truth for each pose
         self.factors = data["factors"] # the factors in the graph
+
+        self.points_partner = {}
 
         # get the scan context images and ring keys
         self.keys, self.context = get_all_context(self.poses,
@@ -69,6 +71,8 @@ class Robot():
         self.team_uncertainty = []
 
         self.loops_tested = []
+
+        self.dummy_cloud = create_full_cloud()
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -116,6 +120,7 @@ class Robot():
         self.search_for_possible_loops()
         self.update_graph()
         self.simulate_loop_closure()
+        self.animate_step()
 
     def start_graph(self) -> None:
         """Start the SLAM graph by inserting the prior.
@@ -483,9 +488,9 @@ class Robot():
                     status = check_frame_for_overlap(cloud,
                                                      pose,
                                                      self.partner_robot_state_estimates[robot][i],
-                                                     75)
+                                                     50)
                     if status: #if so log it
-                        self.possible_loops[(j,robot,i)] = True
+                        self.possible_loops[(j,robot,i)] = True                            
 
     def pass_data_cost(self) -> list:
         """Pass the cost of my most recent point cloud to 
@@ -602,9 +607,54 @@ class Robot():
                 temp.append(np.linalg.det(self.partner_robot_covariance[robot][i]))
                 counter.append(i)
             team_uncertainty[robot] = (counter,temp)
-
-            print("list: ",len(temp))
         self.team_uncertainty = team_uncertainty
+
+    def animate_step(self) -> None:
+        
+        plt.clf()
+
+        # title
+        plt.title("ROBOT: " + str(self.robot_id))
+        
+        # my own trajectory
+        plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
+        
+        # plot the partner robot trajectory
+        for robot in self.partner_robot_state_estimates.keys():
+            temp = []
+            for frame in sorted(self.partner_robot_state_estimates[robot].keys()):
+                pose = self.partner_robot_state_estimates[robot][frame]
+                temp.append([pose.y(),pose.x()])
+            temp = np.array(temp)
+            plt.plot(temp[:,0],temp[:,1])
+
+        # plot inter robot loop closures
+        for loop in self.inter_robot_loop_closures:
+            one = numpy_to_gtsam(self.state_estimate[loop.source_key])
+            if loop.target_key >= len(self.partner_robot_state_estimates[loop.target_robot_id]): continue
+            two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
+
+        # ground truth as dotted line
+        truth_zero = self.truth[0]
+        est_zero = numpy_to_gtsam(self.state_estimate[0])
+        truth_in_my_frame = []
+        for row in self.truth[:len(self.state_estimate)]:
+           between = truth_zero.between(row)
+           temp = est_zero.compose(between)
+           truth_in_my_frame.append([temp.y(),temp.x()])
+        truth_in_my_frame = np.array(truth_in_my_frame)
+        plt.plot(truth_in_my_frame[:,0],truth_in_my_frame[:,1],c="black",linestyle='dashed')
+
+        for cloud,pose in zip(self.points,self.state_estimate):
+                cloud = transform_points(cloud,numpy_to_gtsam(pose))
+                plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
+
+                
+        plt.axis("square")
+        plt.savefig("animate/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
+        
+        plt.clf()
 
     def plot(self) -> None:
         """Visulize the mission
@@ -614,11 +664,38 @@ class Robot():
 
         for robot in self.team_uncertainty:
             plt.plot(self.team_uncertainty[robot][0],self.team_uncertainty[robot][1])
-        plt.ylim(0,.05)
         plt.show()
+
+        for loop in self.possible_loops:
+            i, r, j = loop
+            if i >= len(self.state_estimate): continue
+            one = numpy_to_gtsam(self.state_estimate[i])
+            if j >= len(self.partner_robot_state_estimates[r]): continue
+            two = self.partner_robot_state_estimates[r][j]
+            source_points = transform_points(self.points[i],one)
+            target_points = transform_points(self.dummy_cloud,two)
+
+            for cloud,pose in zip(self.points,self.state_estimate):
+                cloud = transform_points(cloud,numpy_to_gtsam(pose))
+                plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
+
+            for robot in self.partner_robot_state_estimates.keys():
+                temp = []
+                for frame in sorted(self.partner_robot_state_estimates[robot].keys()):
+                    pose = self.partner_robot_state_estimates[robot][frame]
+                    temp.append([pose.y(),pose.x()])
+                temp = np.array(temp)
+                plt.plot(temp[:,0],temp[:,1])
+            
+            plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
+            plt.scatter(source_points[:,1],source_points[:,0],c="blue",zorder=2)
+            plt.scatter(target_points[:,1],target_points[:,0],c="red",zorder=0)
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+            plt.axis("square")
+            plt.show()
         
         # my own trajectory
-        plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
+        '''plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
         plt.title("ROBOT: " + str(self.robot_id))
 
         # plot the partner robot trajectory
@@ -658,17 +735,17 @@ class Robot():
             two = self.partner_robot_state_estimates[r][j]
             # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
 
-        for loop in self.best_possible_loops:
+        for loop in self.possible_loops:
             i, r, j = loop
             if i >= len(self.state_estimate): continue
             one = numpy_to_gtsam(self.state_estimate[i])
             if j >= len(self.partner_robot_state_estimates[r]): continue
             two = self.partner_robot_state_estimates[r][j]
-            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
 
 
         plt.axis("square")
-        plt.show()
+        plt.show()'''
 
         '''for robot in self.partner_robot_covariance.keys():
             temp = []
