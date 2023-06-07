@@ -3,6 +3,8 @@ from typing import Tuple
 import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+
 import time
 
 from utils import create_full_cloud,get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points, check_frame_for_overlap
@@ -73,6 +75,7 @@ class Robot():
         self.loops_tested = []
 
         self.dummy_cloud = create_full_cloud()
+        self.poses_needing_loops = None
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -117,9 +120,10 @@ class Robot():
             self.update_graph()
         self.slam_step += 1
         self.add_factors()
+        self.find_poses_needing_loops()
         self.search_for_possible_loops()
         self.update_graph()
-        self.simulate_loop_closure()
+        # self.simulate_loop_closure()
         self.animate_step()
 
     def start_graph(self) -> None:
@@ -473,24 +477,32 @@ class Robot():
         if flag: return len(trajectory) * 2 * 32 # return the cost if we actually need to send it
         else: return 0
         
+    def find_poses_needing_loops(self) -> None:
+        """Find poses that need loop closures
+        """
+
+        self.poses_needing_loops = {}
+        for robot in self.partner_robot_covariance:
+            for i in self.partner_robot_covariance[robot]:
+                det = np.linalg.det(self.partner_robot_covariance[robot][i])
+                if det > .005:
+                    self.poses_needing_loops[(robot,i)] = True
+
     def search_for_possible_loops(self):
-        """Check for possible loop closures between robots.
+        """Check for possible loop closures between robots. Only check poses that
+        actually need a loop closure.
         """
                 
-        for j, (cloud, pose) in enumerate(zip(self.points,self.state_estimate)):
+        for i, (cloud, pose) in enumerate(zip(self.points,self.state_estimate)):
             pose = numpy_to_gtsam(pose)
             cloud = transform_points(cloud,pose) # place the cloud based on the most recent estimate
-            for robot in self.partner_robot_state_estimates: 
-                for i in self.partner_robot_state_estimates[robot]:
-                    if (j,robot,i) in self.possible_loops: continue # check if we have a possible here already
-                    # check if there is a possible loop between
-                    # my pose i and partner robots jth pose
-                    status = check_frame_for_overlap(cloud,
+            for (robot_id, j) in self.poses_needing_loops:
+                status = check_frame_for_overlap(cloud,
                                                      pose,
-                                                     self.partner_robot_state_estimates[robot][i],
+                                                     self.partner_robot_state_estimates[robot_id][j],
                                                      50)
-                    if status: #if so log it
-                        self.possible_loops[(j,robot,i)] = True                            
+                if status:
+                    self.possible_loops[(i,robot_id,j)] = True                          
 
     def pass_data_cost(self) -> list:
         """Pass the cost of my most recent point cloud to 
@@ -612,6 +624,7 @@ class Robot():
     def animate_step(self) -> None:
         
         plt.clf()
+        fig, ax = plt.subplots()
 
         # title
         plt.title("ROBOT: " + str(self.robot_id))
@@ -646,15 +659,40 @@ class Robot():
         truth_in_my_frame = np.array(truth_in_my_frame)
         plt.plot(truth_in_my_frame[:,0],truth_in_my_frame[:,1],c="black",linestyle='dashed')
 
+        # draw the point clouds
         for cloud,pose in zip(self.points,self.state_estimate):
                 cloud = transform_points(cloud,numpy_to_gtsam(pose))
                 plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
 
-                
+        for loop in self.possible_loops:
+            i, r, j = loop
+            if i >= len(self.state_estimate): continue
+            one = numpy_to_gtsam(self.state_estimate[i])
+            if j >= len(self.partner_robot_state_estimates[r]): continue
+            two = self.partner_robot_state_estimates[r][j]
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+
+        # draw the covariance matrix
+        for robot in self.partner_robot_covariance:
+            for i in self.partner_robot_covariance[robot]:
+                pose = self.partner_robot_state_estimates[robot][i]
+                cov = self.partner_robot_covariance[robot][i]
+                det = np.linalg.det(cov)
+                sigma_x = np.sqrt(cov[0][0])
+                sigma_y = np.sqrt(cov[1][1])
+                e = Ellipse(xy=(pose.y(),pose.x()),width=sigma_y, height=sigma_x, angle=pose.theta())
+                ax.add_artist(e)
+
+                if (robot,i) not in self.poses_needing_loops:
+                    e.set_facecolor("black")
+                else:
+                    e.set_facecolor("red")
+
         plt.axis("square")
         plt.savefig("animate/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
         
         plt.clf()
+        plt.close()
 
     def plot(self) -> None:
         """Visulize the mission
@@ -666,7 +704,7 @@ class Robot():
             plt.plot(self.team_uncertainty[robot][0],self.team_uncertainty[robot][1])
         plt.show()
 
-        for loop in self.possible_loops:
+        '''for loop in self.possible_loops:
             i, r, j = loop
             if i >= len(self.state_estimate): continue
             one = numpy_to_gtsam(self.state_estimate[i])
@@ -692,7 +730,7 @@ class Robot():
             plt.scatter(target_points[:,1],target_points[:,0],c="red",zorder=0)
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
             plt.axis("square")
-            plt.show()
+            plt.show()'''
         
         # my own trajectory
         '''plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
