@@ -3,7 +3,7 @@ from typing import Tuple
 import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
+from matplotlib.patches import Ellipse,Wedge
 
 import time
 
@@ -72,7 +72,7 @@ class Robot():
         self.rmse = None
         self.team_uncertainty = []
 
-        self.loops_tested = []
+        self.loops_tested = {}
 
         self.dummy_cloud = create_full_cloud()
         self.poses_needing_loops = None
@@ -633,6 +633,10 @@ class Robot():
         
         # my own trajectory
         plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
+
+        w = Wedge((self.state_estimate[-1][1],self.state_estimate[-1][0]),5,theta-65,theta+65)
+        ax.add_artist(w)
+        w.set_facecolor("black")
         
         # plot the partner robot trajectory
         for robot in self.partner_robot_state_estimates.keys():
@@ -675,7 +679,7 @@ class Robot():
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
 
         # draw the covariance matrix
-        for robot in self.partner_robot_covariance:
+        '''for robot in self.partner_robot_covariance:
             for i in self.partner_robot_covariance[robot]:
                 pose = self.partner_robot_state_estimates[robot][i]
                 cov = self.partner_robot_covariance[robot][i]
@@ -688,7 +692,7 @@ class Robot():
                 if (robot,i) not in self.poses_needing_loops:
                     e.set_facecolor("black")
                 else:
-                    e.set_facecolor("red")
+                    e.set_facecolor("red")'''
 
         plt.axis("square")
         plt.savefig("animate/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
