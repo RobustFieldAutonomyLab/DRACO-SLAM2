@@ -3,7 +3,7 @@ import gtsam
 import numpy as np
 import matplotlib.pyplot as plt
 
-from utils import load_data,search_for_loops,reject_loops,grade_loop_list,plot_loop,keep_best_loop, search_for_loops_with_prior,verify_pcm,flip_loops
+from utils import do_loops,load_data, numpy_to_gtsam,search_for_loops,reject_loops,grade_loop_list,plot_loop,keep_best_loop, search_for_loops_with_prior,verify_pcm,flip_loops
 from robot import Robot
 from registration import Registration
 from loop_closure import LoopClosure
@@ -31,6 +31,7 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
     queue = []
     loop_list = []
     mode = 0
+    merged = False
 
     comm_link = CommLink()
 
@@ -53,13 +54,18 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                 state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
                 comm_link.log_message(state_cost)
 
-                if slam_step >= 1000:
-                    loops = search_for_loops_with_prior(reg,robots,comm_link,robot_id_source)
-                    if len(loops) > 0:
-                        loop_, loop_search_status = keep_best_loop(loops) # retain only the best loop from the batch
-                        robots[robot_id_source].merge_slam(loops,True) # merge my graph
-
+                if merged:
+                    do_loops(reg,
+                            robots,
+                            comm_link,
+                            robot_id_source,
+                            MIN_POINTS,
+                            RATIO_POINTS,
+                            CONTEXT_DIFFERENCE,
+                            MIN_OVERLAP)
+                            
                 else:
+                    
                     # perform some loop closure search
                     loops = search_for_loops(reg,
                                             robots,
@@ -90,21 +96,28 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                         robots[robot_id_source].add_loop_to_pcm_queue(loop_)
                         valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
 
+                        for loop in valid_loops:
+                            source_pose = loop.source_pose
+                            target_pose = loop.target_pose
+                            between = source_pose.between(target_pose)
+                            # print(between.x(),between.y(),np.degrees(between.theta()))
+
                         # if we have a valid solution from PCM, merge the graphs
                         if len(valid_loops) > 0:
                             robots[robot_id_source].merge_slam(valid_loops) # merge my graph
                             flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
                             for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
                             robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
-                            
+                            # merged = True
+
                         for valid in valid_loops: 
                             loop_list.append(valid)
                             # robots[robot_id_source].plot()
                             # robots[robot_id_target].plot()
                         
     # plot each of the robots
-    #for robot in robots.keys():
-    #    robots[robot].plot()
+    for robot in robots.keys():
+        robots[robot].plot()
 
     #comm_link.plot()
 

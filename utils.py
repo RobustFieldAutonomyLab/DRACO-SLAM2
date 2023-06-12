@@ -349,43 +349,45 @@ def do_loops(reg,robots:dict,comm_link,robot_id_source:int,
              MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float) -> list:
     
     loops = []
-    for (source_key,robot_id_target,target_key) in robots[robot_id_source].best_possible_loops:
+    for (source_frame,robot_id_target,target_frame) in robots[robot_id_source].best_possible_loops:
         # only test each combo once
-        if (source_key,robot_id_target,target_key) in robots[robot_id_source].loops_tested: continue
-        robots[robot_id_source].loops_tested[(source_key,robot_id_target,target_key)] = True
-        
-        source_points = robots[robot_id_source].get_robot_points(source_key,1) # pull the cloud at source
-        source_context = robots[robot_id_source].get_context() # pull the context image at source
+        if (source_frame,robot_id_target,target_frame) in robots[robot_id_source].loops_tested: continue
+        robots[robot_id_source].loops_tested[(source_frame,robot_id_target,target_frame)] = True
 
-        # log the comms cost
-        required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target,target_key)
-        comm_link.log_message(comms_cost_request)
-        comms_cost_point_clouds = robots[robot_id_target].get_data(required_data)
-        comm_link.log_message(comms_cost_point_clouds)
+        # pull the points and state estimate
+        # TODO SUBMAP SIZE
+        source_points = robots[robot_id_source].get_robot_points(source_frame,5) 
+        target_points = robots[robot_id_target].get_robot_points(target_frame,5)
+        target_pose_their_frame = robots[robot_id_target].state_estimate[target_frame]
 
-        target_points = robots[robot_id_target].get_robot_points(target_key,1) # pull the cloud at target
-        target_context = robots[robot_id_target].get_context_index(target_key) # pull the context image at target
-        target_pose_their_frame = robots[robot_id_target].state_estimate[target_key] # the target robots jth pose in it's own ref frame
+        # pull the initial guess
+        one = numpy_to_gtsam(robots[robot_id_source].state_estimate[source_frame])
+        two = robots[robot_id_source].partner_robot_state_estimates[robot_id_target][target_frame]
+        source_points = transform_points(source_points,one)
+        target_points = transform_points(target_points, two)
+
+        true_base = robots[robot_id_source].truth[0]
+        true_one = robots[robot_id_source].truth[source_frame]
+        true_two = robots[robot_id_target].truth[target_frame]
+        # true_one = true_base.between(true_one)
+        # true_two = true_base.between(true_two)
+
+        # compute the loop closure
+        loop = LoopClosure(source_frame,
+                               target_frame,
+                               source_points,
+                               target_points,
+                               None,
+                               None,
+                               target_pose_their_frame,
+                               true_source=true_one,
+                               true_target=true_two) 
+        loop.source_pose = one
+        loop.target_pose = two
+        loop.source_robot_id = robot_id_source
+        loop.target_robot_id = robot_id_target
         
-        # package a loop closure
-        loop = LoopClosure(source_key,
-                            target_key,
-                            source_points,
-                            target_points,
-                            source_context,
-                            target_context,
-                            target_pose_their_frame,
-                            true_source=robots[robot_id_source].truth[source_key],
-                            true_target=robots[robot_id_target].truth[target_key]) 
-        
-        # evaluate the loop closure
-        loop_out = reg.evaluate(loop,MIN_POINTS, -1,-1,-1)
-        print(loop_out.status,loop.message)
-        if loop_out.icp_transform is not None:
-            loop_out.place_loop(robots[robot_id_source].get_pose_gtsam())
-            loop_out.source_robot_id = robot_id_source
-            loop_out.target_robot_id = robot_id_target
-            plot_loop(loop_out)
+        loop = reg.evaluate_with_guess(loop,one)
         
 
 def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,
