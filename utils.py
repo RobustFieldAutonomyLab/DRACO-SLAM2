@@ -349,7 +349,7 @@ def do_loops(reg,robots:dict,comm_link,robot_id_source:int,
              MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float) -> list:
     
     loops = []
-    for (source_frame,robot_id_target,target_frame) in robots[robot_id_source].best_possible_loops:
+    for (source_frame,robot_id_target,target_frame) in robots[robot_id_source].possible_loops:
         # only test each combo once
         if (source_frame,robot_id_target,target_frame) in robots[robot_id_source].loops_tested: continue
         robots[robot_id_source].loops_tested[(source_frame,robot_id_target,target_frame)] = True

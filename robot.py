@@ -495,14 +495,13 @@ class Robot():
                 
         for i, (cloud, pose) in enumerate(zip(self.points,self.state_estimate)):
             pose = numpy_to_gtsam(pose)
-            cloud = transform_points(cloud,pose) # place the cloud based on the most recent estimate
+            # cloud = transform_points(cloud,pose) # place the cloud based on the most recent estimate
             for (robot_id, j) in self.poses_needing_loops:
-                status = check_frame_for_overlap(cloud,
-                                                     pose,
-                                                     self.partner_robot_state_estimates[robot_id][j],
-                                                     50)
-                if status:
-                    self.possible_loops[(i,robot_id,j)] = True                          
+                pose_two = self.partner_robot_state_estimates[robot_id][j]
+                pose_between = pose.between(pose_two)
+                if abs(pose_between.x()) <= 6 and abs(pose_between.y()) <= 6 and abs(np.degrees(pose_between.theta())) < 50:
+                    # print(pose_between.x(),pose_between.y(),np.degrees(pose_between.theta()))
+                    self.possible_loops[(i,robot_id,j)] = True   
 
     def pass_data_cost(self) -> list:
         """Pass the cost of my most recent point cloud to 
@@ -634,9 +633,9 @@ class Robot():
         # my own trajectory
         plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
 
-        w = Wedge((self.state_estimate[-1][1],self.state_estimate[-1][0]),5,theta-65,theta+65)
-        ax.add_artist(w)
-        w.set_facecolor("black")
+        # w = Wedge((self.state_estimate[-1][1],self.state_estimate[-1][0]),5,theta-65,theta+65)
+        # ax.add_artist(w)
+        # w.set_facecolor("black")
         
         # plot the partner robot trajectory
         for robot in self.partner_robot_state_estimates.keys():
@@ -652,7 +651,7 @@ class Robot():
             one = numpy_to_gtsam(self.state_estimate[loop.source_key])
             if loop.target_key >= len(self.partner_robot_state_estimates[loop.target_robot_id]): continue
             two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
-            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
+            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
 
         # ground truth as dotted line
         truth_zero = self.truth[0]
@@ -679,7 +678,7 @@ class Robot():
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
 
         # draw the covariance matrix
-        '''for robot in self.partner_robot_covariance:
+        for robot in self.partner_robot_covariance:
             for i in self.partner_robot_covariance[robot]:
                 pose = self.partner_robot_state_estimates[robot][i]
                 cov = self.partner_robot_covariance[robot][i]
@@ -692,7 +691,7 @@ class Robot():
                 if (robot,i) not in self.poses_needing_loops:
                     e.set_facecolor("black")
                 else:
-                    e.set_facecolor("red")'''
+                    e.set_facecolor("red")
 
         plt.axis("square")
         plt.savefig("animate/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
