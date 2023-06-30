@@ -537,44 +537,7 @@ class Robot():
                 pose_between = pose.between(pose_two)
                 if abs(pose_between.x()) <= 6 and abs(pose_between.y()) <= 6 and abs(np.degrees(pose_between.theta())) < 50:
                     # print(pose_between.x(),pose_between.y(),np.degrees(pose_between.theta()))
-                    self.possible_loops[(i,robot_id,j)] = True   
-
-    def pass_data_cost(self) -> list:
-        """Pass the cost of my most recent point cloud to 
-        the rest of my team. 
-
-        Returns:
-            list: tthe costs of my point clouds up to now
-        """
-
-        if self.my_exchange_costs is None:
-            self.my_exchange_costs = []
-            for row in self.points:
-                self.my_exchange_costs.append(len(row) * 2 * 32)
-        return self.my_exchange_costs[:self.slam_step+1]
-    
-    def update_partner_costs(self,robot_id:int, comms_cost:list):
-        """Update the cost of exchangeing a point cloud
-
-        Args:
-            robot_id (int): the robot id 
-            comms_cost (int): the cost to exchange this keyframe
-        """
-
-        self.partner_robot_exchange_costs[robot_id] = comms_cost
-
-        # get the max comms cost we have ever seen. Look at ours, and what we have been sent
-        max_list = []
-        for robot in self.partner_robot_exchange_costs.keys():
-            max_list.append(np.max(self.partner_robot_exchange_costs[robot]))
-        if self.my_exchange_costs is not None:
-            max_list.append(np.max(self.my_exchange_costs))
-
-        # normalize the comms costs using the max, assuming the min would be zero
-        max_val = np.max(max_list)
-        for robot in self.partner_robot_exchange_costs.keys():
-            self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
-
+                    self.possible_loops[(i,robot_id,j)] = True
 
     def simulate_loop_closure(self):
         """Simulate the impact of the possible loop closures in self.possible loops. 
@@ -626,8 +589,44 @@ class Robot():
         for index in ind:
             if index >= len(loop_list): continue
             if loop_list[index] not in self.best_possible_loops:
-                self.best_possible_loops[loop_list[index]] = False'''
-             
+                self.best_possible_loops[loop_list[index]] = False'''   
+
+    def pass_data_cost(self) -> list:
+        """Pass the cost of my most recent point cloud to 
+        the rest of my team. 
+
+        Returns:
+            list: tthe costs of my point clouds up to now
+        """
+
+        if self.my_exchange_costs is None:
+            self.my_exchange_costs = []
+            for row in self.points:
+                self.my_exchange_costs.append(len(row) * 2 * 32)
+        return self.my_exchange_costs[:self.slam_step+1]
+    
+    def update_partner_costs(self,robot_id:int, comms_cost:list):
+        """Update the cost of exchangeing a point cloud
+
+        Args:
+            robot_id (int): the robot id 
+            comms_cost (int): the cost to exchange this keyframe
+        """
+
+        self.partner_robot_exchange_costs[robot_id] = comms_cost
+
+        # get the max comms cost we have ever seen. Look at ours, and what we have been sent
+        max_list = []
+        for robot in self.partner_robot_exchange_costs.keys():
+            max_list.append(np.max(self.partner_robot_exchange_costs[robot]))
+        if self.my_exchange_costs is not None:
+            max_list.append(np.max(self.my_exchange_costs))
+
+        # normalize the comms costs using the max, assuming the min would be zero
+        max_val = np.max(max_list)
+        for robot in self.partner_robot_exchange_costs.keys():
+            self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
+         
     def run_metrics(self) -> None:
         """Generate some metrics
         """
