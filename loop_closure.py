@@ -43,6 +43,8 @@ class LoopClosure():
 
         self.inserted = False
 
+        self.step_found = None
+
     def place_loop(self,source_pose:gtsam.Pose2) -> None:
         """Place the target pose in my frame using the icp transform. 
 
