@@ -60,6 +60,7 @@ class Robot():
 
         self.prior_sigmas = [0.1, 0.1, 0.01]
         self.prior_model = self.create_noise_model(self.prior_sigmas)
+        self.partner_robot_model = self.create_noise_model([0.05, 0.05, 0.005])
 
         self.inter_robot_loop_closures = []
 
@@ -67,6 +68,7 @@ class Robot():
 
         self.possible_loops = {}
         self.best_possible_loops = {}
+        self.tested_loops = {}
 
         self.mse = None
         self.rmse = None
@@ -77,6 +79,7 @@ class Robot():
         self.dummy_cloud = create_full_cloud()
         self.poses_needing_loops = None
         self.icp_count = 0
+        self.merged = False
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -231,11 +234,25 @@ class Robot():
         """Return the pose at the current step
 
         Returns:
-            gtsam.Pose2: _description_
+            gtsam.Pose2: the gtsam pose
         """
         # TODO UPDATE
         if self.slam_step >= len(self.poses_g):return self.poses_g[-1]
         return self.poses_g[self.slam_step]
+    
+    def get_pose_gtsam_at_index(self,index:int) -> gtsam.Pose2:
+        """Returns the pose at the requested step, step index
+
+        Args:
+            index (int): the slam step we want the pose from 
+
+        Returns:
+            gtsam.Pose2: the gtsam pose
+        """
+
+        assert(index < len(self.state_estimate))
+        assert(index >= 0)
+        return numpy_to_gtsam(self.state_estimate[index])
     
     def add_loop_to_pcm_queue(self, loop:LoopClosure) -> None:
         """Add a loop closure the pcm queue. Prune any old loops before we add.
@@ -419,6 +436,20 @@ class Robot():
 
         for loop in loop_closures:
             
+            if loop.target_robot_id in self.multi_robot_frames:
+                if loop.target_key in self.multi_robot_frames[loop.target_robot_id]:
+                    continue
+                
+            '''if self.merged and self.robot_id == 1:
+                partner_est = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
+                print(loop.source_key,loop.target_key)
+                print(loop.source_robot_id,loop.target_robot_id)
+                print(partner_est)
+                print(loop.target_pose)
+                print(loop.true_source.between(loop.true_target))
+                print(loop.estimated_transform)
+                print("----------")'''
+
             # parse some info
             source_symbol = X(loop.source_key)
             target_symbol = robot_to_symbol(loop.target_robot_id,loop.target_key)
@@ -451,19 +482,9 @@ class Robot():
             self.partner_reference_frames[loop.target_robot_id] = loop.target_pose.compose(
                                                                         loop.target_pose_their_frame.inverse())
         
-        
-        
         self.inter_robot_loop_closures += loop_closures
         self.update_graph() # upate the graph with the new info
 
-        '''partner_est = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
-        my_est = numpy_to_gtsam(self.state_estimate[loop.source_key])
-        between = my_est.between(partner_est)
-        print(between)
-        print(loop.estimated_transform)
-        print("--------")'''
-
-        
 
     def update_partner_trajectory(self,robot_id:int,trajectory:np.array) -> int:
         """Update the trajectory. This is from the other robot performing SLAM.
@@ -511,6 +532,7 @@ class Robot():
             pose = numpy_to_gtsam(pose)
             # cloud = transform_points(cloud,pose) # place the cloud based on the most recent estimate
             for (robot_id, j) in self.poses_needing_loops:
+                if robot_id in self.multi_robot_frames and j in self.multi_robot_frames[robot_id]: continue
                 pose_two = self.partner_robot_state_estimates[robot_id][j]
                 pose_between = pose.between(pose_two)
                 if abs(pose_between.x()) <= 6 and abs(pose_between.y()) <= 6 and abs(np.degrees(pose_between.theta())) < 50:
@@ -565,12 +587,11 @@ class Robot():
         loop_list = []
         for (source_key, target_robot_id, target_key) in self.possible_loops:
             
+            if (source_key, target_robot_id, target_key) in self.tested_loops: continue
+            
             # copy of isam combined
-
             isam = gtsam.ISAM2(self.isam_combined)
         
-            # if (source_key, target_robot_id, target_key) in self.best_possible_loops: continue
-
             # get the covariance at this pose before we insert the hypothetical loop closure
             cov_before = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
 
@@ -596,10 +617,10 @@ class Robot():
             ratio_list.append(ratio)
             loop_list.append((source_key,target_robot_id,target_key))
 
-        self.best_possible_loops = {}
-        if len(ratio_list) > 0 and np.min(ratio_list) < 0.9:
-            self.best_possible_loops[loop_list[np.argmin(ratio_list)]] = False
-            print(np.min(ratio_list))
+        self.best_possible_loops = ()
+        if len(ratio_list) > 0:
+            self.best_possible_loops = loop_list[np.argmin(ratio_list)]
+            self.tested_loops[np.argmin(ratio_list)] = True
         '''if len(ratio_list) <= 4: ind = [0,1,2,3]
         else: ind = np.argpartition(ratio_list, 4)[:4]
         for index in ind:
@@ -686,13 +707,13 @@ class Robot():
                 cloud = transform_points(cloud,numpy_to_gtsam(pose))
                 plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
 
-        for loop in self.best_possible_loops:
+        '''for loop in self.best_possible_loops:
             i, r, j = loop
             if i >= len(self.state_estimate): continue
             one = numpy_to_gtsam(self.state_estimate[i])
             if j >= len(self.partner_robot_state_estimates[r]): continue
             two = self.partner_robot_state_estimates[r][j]
-            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")'''
 
         # draw the covariance matrix
         for robot in self.partner_robot_covariance:

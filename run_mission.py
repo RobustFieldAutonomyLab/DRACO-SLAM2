@@ -53,79 +53,53 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                 # Update the partner trajectory and account for comms
                 state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
                 comm_link.log_message(state_cost)
-
-                if merged:
-                    loops = do_loops(reg,
-                                    robots,
-                                    comm_link,
-                                    robot_id_source,
-                                    MIN_POINTS,
-                                    RATIO_POINTS,
-                                    CONTEXT_DIFFERENCE,
-                                    MIN_OVERLAP)
                     
-                    if len(loops) > 0:
-                        loop_, loop_search_status = keep_best_loop(loops)
-                        loops = [loop_]
-                        robots[robot_id_source].merge_slam(loops) # merge my graph
-                        valid_loops = grade_loop_list(loops,2.5,np.radians(2.5))
-                        '''flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
-                        for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
-                        robots[robot_id_target].merge_slam(flipped_valid_loops)''' # merge the partner robot graph
-                        for l in valid_loops:
-                            l.step_found = robots[robot_id_source].slam_step
-                            plot_loop(l)
+                # perform some loop closure search
+                loops = search_for_loops(reg,
+                                        robots,
+                                        comm_link,
+                                        robot_id_source,
+                                        robot_id_target,
+                                        MIN_POINTS,
+                                        RATIO_POINTS,
+                                        CONTEXT_DIFFERENCE,
+                                        MIN_OVERLAP,
+                                        MAX_TREE_DIST,
+                                        KNN)
+            
+                # only keep going if we found any loop closures
+                if len(loops) == 0: continue
+                loop_, loop_search_status = keep_best_loop(loops) # retain only the best loop from the batch
+                if loop_search_status == False: continue # make sure the best loop not outlier
 
-                else:
+                # do some book keeping
+                loop_.place_loop(robots[robot_id_source].get_pose_gtsam_at_index(loop_.source_key))
+                loop_.source_robot_id = robot_id_source
+                loop_.target_robot_id = robot_id_target
+
+                # check the status of the loop closure
+                if loop_.status:
                     
-                    # perform some loop closure search
-                    loops = search_for_loops(reg,
-                                            robots,
-                                            comm_link,
-                                            robot_id_source,
-                                            robot_id_target,
-                                            MIN_POINTS,
-                                            RATIO_POINTS,
-                                            CONTEXT_DIFFERENCE,
-                                            MIN_OVERLAP,
-                                            MAX_TREE_DIST,
-                                            KNN)
-                
-                    # only keep going if we found any loop closures
-                    if len(loops) == 0: continue
-                    loop_, loop_search_status = keep_best_loop(loops) # retain only the best loop from the batch
-                    if loop_search_status == False: continue # make sure the best loop not outlier
-
-                    # do some book keeping
-                    loop_.place_loop(robots[robot_id_source].get_pose_gtsam())
-                    loop_.source_robot_id = robot_id_source
-                    loop_.target_robot_id = robot_id_target
-
-                    # check the status of the loop closure
-                    if loop_.status:
-                        
-                        # update and solve PCM
+                    if robots[robot_id_source].merged:
+                        valid_loops = [loop_]
+                        plot_loop(loop_)
+                    else: # update and solve PCM
                         robots[robot_id_source].add_loop_to_pcm_queue(loop_)
                         valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
 
-                        for loop in valid_loops:
-                            source_pose = loop.source_pose
-                            target_pose = loop.target_pose
-                            between = source_pose.between(target_pose)
+                    # if we have a valid solution from PCM, merge the graphs
+                    if len(valid_loops) > 0:
+                        robots[robot_id_source].merge_slam(valid_loops) # merge my graph
+                        flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
+                        for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
+                        robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
+                        robots[robot_id_source].merged = True
+                        robots[robot_id_target].merged = True
 
-                        # if we have a valid solution from PCM, merge the graphs
-                        if len(valid_loops) > 0:
-                            robots[robot_id_source].merge_slam(valid_loops) # merge my graph
-                            flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
-                            for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
-                            robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
-                            # merged = True
-
-                        for valid in valid_loops: 
-                            loop_list.append(valid)
-                            plot_loop(valid)
-                            # robots[robot_id_source].plot()
-                            # robots[robot_id_target].plot()
+                    for valid in valid_loops: 
+                        loop_list.append(valid)
+                        # robots[robot_id_source].plot()
+                        # robots[robot_id_target].plot()
                         
     # plot each of the robots
     for robot in robots.keys():

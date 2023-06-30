@@ -7,6 +7,7 @@ from typing import Tuple
 from scipy.spatial.transform import Rotation
 from collections import defaultdict
 from itertools import combinations
+import time
 
 from loop_closure import LoopClosure
 from bruce_slam import pcl
@@ -406,26 +407,36 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
 
     loop_list = []
 
-    ring_key,ring_key_index = robots[robot_id_source].get_key() # get the descipter we want to search with
-    tree = robots[robot_id_target].get_tree() # get the tree we want to search against           
-    distances, indexes = tree.query(ring_key,k=KNN,distance_upper_bound=MAX_TREE_DIST) # search
+    if robots[robot_id_source].merged == False:
+        ring_key,ring_key_index = robots[robot_id_source].get_key() # get the descipter we want to search with
+        tree = robots[robot_id_target].get_tree() # get the tree we want to search against           
+        distances, indexes = tree.query(ring_key,k=KNN,distance_upper_bound=MAX_TREE_DIST) # search
 
-    # TODO check if we need submap size here
-    source_points = robots[robot_id_source].get_robot_points(ring_key_index,1) # pull the cloud at source
-    source_context = robots[robot_id_source].get_context() # pull the context image at source   
+        # TODO check if we need submap size here
+        source_points = robots[robot_id_source].get_robot_points(ring_key_index,1) # pull the cloud at source
+        source_context = robots[robot_id_source].get_context() # pull the context image at source   
 
-    indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
+        indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
+
+    else:
+        if len(robots[robot_id_source].best_possible_loops) == 0: return loop_list
+        source_key, robot_id_target, target_key = robots[robot_id_source].best_possible_loops
+        ring_key_index = source_key
+        indexes = [target_key]
+
+        source_points = robots[robot_id_source].get_robot_points(ring_key_index,1) # pull the cloud at source
+        source_context = robots[robot_id_source].get_context() # pull the context image at source  
 
     count = 0
     for j in indexes: # loop over the matches from the tree search
         if j < robots[robot_id_target].total_steps: # protect for out of range
-            if robot_id_target in robots[robot_id_source].partner_robot_state_estimates:
+            '''if robot_id_target in robots[robot_id_source].partner_robot_state_estimates:
                 if j in robots[robot_id_source].partner_robot_state_estimates[robot_id_target]:
                     test_pose_source = numpy_to_gtsam(robots[robot_id_source].state_estimate[ring_key_index])
                     test_pose_target = robots[robot_id_source].partner_robot_state_estimates[robot_id_target][j]
                     test_pose = test_pose_source.between(test_pose_target)
                     dist = np.sqrt(test_pose.x()**2 + test_pose.y()**2)
-                    rot = np.degrees(abs(test_pose.theta()))
+                    rot = np.degrees(abs(test_pose.theta()))'''
                     # if dist > 10 or rot > 60:
                     #    continue
 
@@ -447,8 +458,11 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                                target_context,
                                target_pose_their_frame,
                                true_source=robots[robot_id_source].truth[ring_key_index],
-                               true_target=robots[robot_id_target].truth[j]) 
-            loop_out = reg.evaluate(loop,MIN_POINTS, RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
+                               true_target=robots[robot_id_target].truth[j])
+            if robots[robot_id_source].merged == False:
+                loop_out = reg.evaluate(loop,MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
+            else:
+                loop_out = reg.evaluate(loop,10, 100000,100000000,.55)
             robots[robot_id_source].icp_count += 1
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
@@ -549,7 +563,7 @@ def plot_loop(loop:LoopClosure) -> None:
         fig.suptitle("True Negative",fontsize=20)
 
     plt.axis("square")
-    plt.savefig("animate/loops/"+str(loop.source_robot_id)+"_"+str(loop.step_found)+"_"+str(loop.source_key)+"_"+str(loop.target_key)+".png")
+    plt.savefig("animate/loops/"+str(loop.source_robot_id)+"_"+str(time.time())+"_"+str(loop.source_key)+"_"+str(loop.target_key)+".png")
     plt.clf()
     plt.close()
 
