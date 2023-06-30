@@ -91,8 +91,16 @@ class Registration():
         loop.overlap, loop.fit_score = self.icp_two.overlap(loop.reg_points,loop.target_points)
         loop.cov = np.eye(3) * loop.fit_score * 20.0
 
-        '''plt.scatter(loop.reg_points[:,0],loop.reg_points[:,1])
-        plt.scatter(loop.target_points[:,0],loop.target_points[:,1])
+        true_between = loop.true_source.between(loop.true_target)
+        '''print(loop.overlap)
+        print(true_between.x(), true_between.y(), np.degrees(true_between.theta()))
+        print(loop.estimated_transform.x(), loop.estimated_transform.y(),np.degrees(loop.estimated_transform.theta()))
+        print("-------------")
+              
+        plt.scatter(loop.source_points[:,0],loop.source_points[:,1],c="orange")
+        plt.scatter(loop.reg_points[:,0],loop.reg_points[:,1],c="red")
+        plt.scatter(loop.target_points[:,0],loop.target_points[:,1],c="blue")
+        plt.title(str(loop.overlap))
         plt.axis("square")
         plt.show()'''
         
@@ -173,6 +181,7 @@ class Registration():
             
         # populate the fit score
         loop.fit_score = fit_score
+        loop.cov = np.eye(3) * loop.fit_score * 20.0
 
         # refine the transform estimate using standard ICP
         icp_status, icp_transform = self.icp.refine(loop.source_points_init, loop.target_points)
@@ -190,5 +199,4 @@ class Registration():
                         + " Ratio: " + str(loop.ratio) 
                         + " Context Diff: " + str(loop.context_diff) 
                         + " Overlap: " + str(overlap))
-        print(time.time()-start_time)
         return loop

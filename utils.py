@@ -349,45 +349,38 @@ def do_loops(reg,robots:dict,comm_link,robot_id_source:int,
              MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float) -> list:
     
     loops = []
-    for (source_frame,robot_id_target,target_frame) in robots[robot_id_source].possible_loops:
-        # only test each combo once
-        if (source_frame,robot_id_target,target_frame) in robots[robot_id_source].loops_tested: continue
-        robots[robot_id_source].loops_tested[(source_frame,robot_id_target,target_frame)] = True
-
-        # pull the points and state estimate
-        # TODO SUBMAP SIZE
-        source_points = robots[robot_id_source].get_robot_points(source_frame,5) 
-        target_points = robots[robot_id_target].get_robot_points(target_frame,5)
-        target_pose_their_frame = robots[robot_id_target].state_estimate[target_frame]
-
-        # pull the initial guess
-        one = numpy_to_gtsam(robots[robot_id_source].state_estimate[source_frame])
-        two = robots[robot_id_source].partner_robot_state_estimates[robot_id_target][target_frame]
-        source_points = transform_points(source_points,one)
-        target_points = transform_points(target_points, two)
-
-        true_base = robots[robot_id_source].truth[0]
-        true_one = robots[robot_id_source].truth[source_frame]
-        true_two = robots[robot_id_target].truth[target_frame]
-        # true_one = true_base.between(true_one)
-        # true_two = true_base.between(true_two)
-
-        # compute the loop closure
-        loop = LoopClosure(source_frame,
-                               target_frame,
-                               source_points,
-                               target_points,
-                               None,
-                               None,
-                               target_pose_their_frame,
-                               true_source=true_one,
-                               true_target=true_two) 
-        loop.source_pose = one
-        loop.target_pose = two
-        loop.source_robot_id = robot_id_source
-        loop.target_robot_id = robot_id_target
+    for (ring_key_index,robot_id_target,j) in robots[robot_id_source].best_possible_loops:
         
-        loop = reg.evaluate_with_guess(loop,one)
+        # only test each combo once
+        if (ring_key_index,robot_id_target,j) in robots[robot_id_source].loops_tested: continue
+        robots[robot_id_source].loops_tested[(ring_key_index,robot_id_target,j)] = True
+
+        source_points = robots[robot_id_source].get_robot_points(ring_key_index,5) # pull the cloud at source
+        source_context = robots[robot_id_source].get_context() # pull the context image at source  
+
+        target_points = robots[robot_id_target].get_robot_points(j,5) # pull the cloud at target
+        target_context = robots[robot_id_target].get_context_index(j) # pull the context image at target
+        target_pose_their_frame = robots[robot_id_target].state_estimate[j] # the target robots jth pose in it's own ref frame
+        
+        loop = LoopClosure(ring_key_index,
+                            j,
+                            source_points,
+                            target_points,
+                            source_context,
+                            target_context,
+                            target_pose_their_frame,
+                            true_source=robots[robot_id_source].truth[ring_key_index],
+                            true_target=robots[robot_id_target].truth[j]) 
+        loop_out = reg.evaluate(loop,10, -1,-1,0.55)
+        robots[robot_id_source].icp_count += 1
+        if loop.status:
+            loop_out.place_loop(robots[robot_id_source].get_pose_gtsam())
+            print(loop.estimated_transform,loop.true_source.between(loop.true_target))
+            loop_out.source_robot_id = robot_id_source
+            loop_out.target_robot_id = robot_id_target                
+            loops.append(loop_out)
+
+    return loops
         
 
 def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,
@@ -423,6 +416,7 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
 
     indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
 
+    count = 0
     for j in indexes: # loop over the matches from the tree search
         if j < robots[robot_id_target].total_steps: # protect for out of range
             if robot_id_target in robots[robot_id_source].partner_robot_state_estimates:
@@ -432,8 +426,8 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                     test_pose = test_pose_source.between(test_pose_target)
                     dist = np.sqrt(test_pose.x()**2 + test_pose.y()**2)
                     rot = np.degrees(abs(test_pose.theta()))
-                    if dist > 10 or rot > 60:
-                        continue
+                    # if dist > 10 or rot > 60:
+                    #    continue
 
             # log the comms cost
             required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target,j)
@@ -455,9 +449,11 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                                true_source=robots[robot_id_source].truth[ring_key_index],
                                true_target=robots[robot_id_target].truth[j]) 
             loop_out = reg.evaluate(loop,MIN_POINTS, RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
+            robots[robot_id_source].icp_count += 1
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
-                
+            count += 1
+
     return loop_list
 
 def reject_loops(loops:list,min_points:int,ratio_points:float,context_difference:int,min_overlap:float) -> list:
@@ -523,9 +519,11 @@ def plot_loop(loop:LoopClosure) -> None:
         loop (LoopClosure): the loop closure we want to vis
     """
 
+    plt.clf()
     fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(15, 15))
     '''ax1.scatter(loop.reg_points[:,0],loop.reg_points[:,1],c="blue")
     ax1.scatter(loop.target_points[:,0],loop.target_points[:,1],c="red")'''
+    plt.title(str(loop.overlap))
 
     source_temp = transform_points(loop.source_points,loop.source_pose)
     target_temp = transform_points(loop.target_points,loop.target_pose)
@@ -550,7 +548,10 @@ def plot_loop(loop:LoopClosure) -> None:
     elif loop.status == False and loop.grade == False:
         fig.suptitle("True Negative",fontsize=20)
 
-    plt.show()
+    plt.axis("square")
+    plt.savefig("animate/loops/"+str(loop.source_robot_id)+"_"+str(loop.step_found)+"_"+str(loop.source_key)+"_"+str(loop.target_key)+".png")
+    plt.clf()
+    plt.close()
 
 def find_cliques(G:defaultdict):
     """Returns all maximal cliques in an undirected graph.
@@ -722,6 +723,7 @@ def flip_loops(loops:list) -> list:
         loop_fliped.source_robot_id = loop.target_robot_id
         loop_fliped.estimated_transform = estimated_transform
         loop_fliped.target_pose = loop.target_pose_their_frame.compose(estimated_transform)
+        loop_fliped.cov = loop.cov
         loops_out.append(loop_fliped)
 
     return loops_out

@@ -76,6 +76,7 @@ class Robot():
 
         self.dummy_cloud = create_full_cloud()
         self.poses_needing_loops = None
+        self.icp_count = 0
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -107,6 +108,7 @@ class Robot():
             gtsam.noiseModel_Robust: gtsam version of the input
         """
 
+        cov = np.eye(3) * cov
         model = gtsam.noiseModel.Gaussian.Covariance(cov)
         robust = gtsam.noiseModel.mEstimator.Cauchy.Create(1.0)
         return gtsam.noiseModel.Robust.Create(robust, model)
@@ -421,8 +423,9 @@ class Robot():
             source_symbol = X(loop.source_key)
             target_symbol = robot_to_symbol(loop.target_robot_id,loop.target_key)
             noise_model = self.create_noise_model(self.prior_sigmas) #TODO update noise model
-            if robust:
-                noise_model = self.create_robust_noise_model(loop.cov)
+            '''if robust:
+                print(loop.cov)
+                noise_model = self.create_robust_noise_model(self.prior_sigmas)'''
 
             # build a factor and add it
             factor = gtsam.BetweenFactorPose2(source_symbol,
@@ -448,8 +451,19 @@ class Robot():
             self.partner_reference_frames[loop.target_robot_id] = loop.target_pose.compose(
                                                                         loop.target_pose_their_frame.inverse())
         
+        
+        
         self.inter_robot_loop_closures += loop_closures
         self.update_graph() # upate the graph with the new info
+
+        '''partner_est = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
+        my_est = numpy_to_gtsam(self.state_estimate[loop.source_key])
+        between = my_est.between(partner_est)
+        print(between)
+        print(loop.estimated_transform)
+        print("--------")'''
+
+        
 
     def update_partner_trajectory(self,robot_id:int,trajectory:np.array) -> int:
         """Update the trajectory. This is from the other robot performing SLAM.
@@ -583,12 +597,15 @@ class Robot():
             loop_list.append((source_key,target_robot_id,target_key))
 
         self.best_possible_loops = {}
-        if len(ratio_list) <= 4: ind = [0,1,2,3]
+        if len(ratio_list) > 0 and np.min(ratio_list) < 0.9:
+            self.best_possible_loops[loop_list[np.argmin(ratio_list)]] = False
+            print(np.min(ratio_list))
+        '''if len(ratio_list) <= 4: ind = [0,1,2,3]
         else: ind = np.argpartition(ratio_list, 4)[:4]
         for index in ind:
             if index >= len(loop_list): continue
             if loop_list[index] not in self.best_possible_loops:
-                self.best_possible_loops[loop_list[index]] = False
+                self.best_possible_loops[loop_list[index]] = False'''
              
     def run_metrics(self) -> None:
         """Generate some metrics
@@ -651,7 +668,7 @@ class Robot():
             one = numpy_to_gtsam(self.state_estimate[loop.source_key])
             if loop.target_key >= len(self.partner_robot_state_estimates[loop.target_robot_id]): continue
             two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
-            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
 
         # ground truth as dotted line
         truth_zero = self.truth[0]
@@ -675,7 +692,7 @@ class Robot():
             one = numpy_to_gtsam(self.state_estimate[i])
             if j >= len(self.partner_robot_state_estimates[r]): continue
             two = self.partner_robot_state_estimates[r][j]
-            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
+            # plt.plot([one.y(),two.y()],[one.x(),two.x()],c="purple")
 
         # draw the covariance matrix
         for robot in self.partner_robot_covariance:
@@ -705,9 +722,9 @@ class Robot():
 
         self.run_metrics()
 
-        for robot in self.team_uncertainty:
+        '''for robot in self.team_uncertainty:
             plt.plot(self.team_uncertainty[robot][0],self.team_uncertainty[robot][1])
-        plt.show()
+        plt.show()'''
 
         '''for loop in self.possible_loops:
             i, r, j = loop

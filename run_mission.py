@@ -55,15 +55,27 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                 comm_link.log_message(state_cost)
 
                 if merged:
-                    do_loops(reg,
-                            robots,
-                            comm_link,
-                            robot_id_source,
-                            MIN_POINTS,
-                            RATIO_POINTS,
-                            CONTEXT_DIFFERENCE,
-                            MIN_OVERLAP)
-                            
+                    loops = do_loops(reg,
+                                    robots,
+                                    comm_link,
+                                    robot_id_source,
+                                    MIN_POINTS,
+                                    RATIO_POINTS,
+                                    CONTEXT_DIFFERENCE,
+                                    MIN_OVERLAP)
+                    
+                    if len(loops) > 0:
+                        loop_, loop_search_status = keep_best_loop(loops)
+                        loops = [loop_]
+                        robots[robot_id_source].merge_slam(loops) # merge my graph
+                        valid_loops = grade_loop_list(loops,2.5,np.radians(2.5))
+                        '''flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
+                        for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
+                        robots[robot_id_target].merge_slam(flipped_valid_loops)''' # merge the partner robot graph
+                        for l in valid_loops:
+                            l.step_found = robots[robot_id_source].slam_step
+                            plot_loop(l)
+
                 else:
                     
                     # perform some loop closure search
@@ -100,7 +112,6 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                             source_pose = loop.source_pose
                             target_pose = loop.target_pose
                             between = source_pose.between(target_pose)
-                            # print(between.x(),between.y(),np.degrees(between.theta()))
 
                         # if we have a valid solution from PCM, merge the graphs
                         if len(valid_loops) > 0:
@@ -112,14 +123,16 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
 
                         for valid in valid_loops: 
                             loop_list.append(valid)
+                            plot_loop(valid)
                             # robots[robot_id_source].plot()
                             # robots[robot_id_target].plot()
                         
     # plot each of the robots
     for robot in robots.keys():
+        print(robots[robot].icp_count)
         robots[robot].plot()
 
-    #comm_link.plot()
+    comm_link.plot()
 
 run(sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
