@@ -1,4 +1,5 @@
 import time
+import numpy as np
 import matplotlib.pyplot as plt
 
 class CommLink():
@@ -23,3 +24,9 @@ class CommLink():
 
         plt.plot(self.time_stamps,self.usage)
         plt.show()
+
+    def report(self):
+        """Output the details
+        """
+
+        print(np.sum(self.usage))
