@@ -19,23 +19,23 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
     reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
 
     # Load up the data
-    data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/5.pickle",5)
-    data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/6.pickle",6)
-    data = {1:data_one,2:data_two}
+    data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/1.pickle",1)
+    data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/2.pickle",2)
+    data_three = load_data("/home/jake/Desktop/holoocean_bags/scrape/3.pickle",3)
+    data = {1:data_one,2:data_two,3:data_three}
 
     robots = {}
-    robot_list = [1,2]
+    robot_list = [1,2,3]
     for key in data.keys():
         robots[key] = Robot(key,data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
 
     queue = []
     loop_list = []
     mode = 0
-    merged = False
 
     comm_link = CommLink()
 
-    for slam_step in range(63):
+    for slam_step in range(59):
         print(slam_step)
 
         # step the robots forward
@@ -74,13 +74,11 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
 
                 # do some book keeping
                 loop_.place_loop(robots[robot_id_source].get_pose_gtsam_at_index(loop_.source_key))
-                loop_.source_robot_id = robot_id_source
-                loop_.target_robot_id = robot_id_target
 
                 # check the status of the loop closure
                 if loop_.status:
                     
-                    if robots[robot_id_source].merged:
+                    if robots[robot_id_source].is_merged(robot_id_target):
                         valid_loops = [loop_]
                         plot_loop(loop_)
                     else: # update and solve PCM
@@ -92,9 +90,8 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                         robots[robot_id_source].merge_slam(valid_loops) # merge my graph
                         flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
                         for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
-                        robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
-                        robots[robot_id_source].merged = True
-                        robots[robot_id_target].merged = True
+                        # robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
+                        robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
 
                     for valid in valid_loops: 
                         loop_list.append(valid)

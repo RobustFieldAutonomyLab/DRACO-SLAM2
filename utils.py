@@ -407,7 +407,7 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
 
     loop_list = []
 
-    if robots[robot_id_source].merged == False:
+    if robots[robot_id_source].is_merged(robot_id_target) == False:
         ring_key,ring_key_index = robots[robot_id_source].get_key() # get the descipter we want to search with
         tree = robots[robot_id_target].get_tree() # get the tree we want to search against           
         distances, indexes = tree.query(ring_key,k=KNN,distance_upper_bound=MAX_TREE_DIST) # search
@@ -425,20 +425,20 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
         indexes = [target_key]
 
         source_points = robots[robot_id_source].get_robot_points(ring_key_index,1) # pull the cloud at source
-        source_context = robots[robot_id_source].get_context() # pull the context image at source  
+        source_context = robots[robot_id_source].get_context() # pull the context image at source
 
     count = 0
     for j in indexes: # loop over the matches from the tree search
         if j < robots[robot_id_target].total_steps: # protect for out of range
-            '''if robot_id_target in robots[robot_id_source].partner_robot_state_estimates:
+            if robots[robot_id_source].is_merged(robot_id_target) == False and robot_id_target in robots[robot_id_source].partner_robot_state_estimates:
                 if j in robots[robot_id_source].partner_robot_state_estimates[robot_id_target]:
                     test_pose_source = numpy_to_gtsam(robots[robot_id_source].state_estimate[ring_key_index])
                     test_pose_target = robots[robot_id_source].partner_robot_state_estimates[robot_id_target][j]
                     test_pose = test_pose_source.between(test_pose_target)
                     dist = np.sqrt(test_pose.x()**2 + test_pose.y()**2)
-                    rot = np.degrees(abs(test_pose.theta()))'''
-                    # if dist > 10 or rot > 60:
-                    #    continue
+                    rot = np.degrees(abs(test_pose.theta()))
+                    if dist > 10 or rot > 60:
+                        continue
 
             # log the comms cost
             required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target,j)
@@ -459,10 +459,12 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                                target_pose_their_frame,
                                true_source=robots[robot_id_source].truth[ring_key_index],
                                true_target=robots[robot_id_target].truth[j])
-            if robots[robot_id_source].merged == False:
+            loop.source_robot_id = robot_id_source
+            loop.target_robot_id = robot_id_target
+            if robots[robot_id_source].is_merged(robot_id_target) == False:
                 loop_out = reg.evaluate(loop,MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
             else:
-                loop_out = reg.evaluate(loop,10, 100000,100000000,.55)
+                loop_out = reg.evaluate(loop,10, 100000,100000000,.65)
             robots[robot_id_source].icp_count += 1
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
@@ -563,7 +565,14 @@ def plot_loop(loop:LoopClosure) -> None:
         fig.suptitle("True Negative",fontsize=20)
 
     plt.axis("square")
-    plt.savefig("animate/loops/"+str(loop.source_robot_id)+"_"+str(time.time())+"_"+str(loop.source_key)+"_"+str(loop.target_key)+".png")
+    plt.savefig("animate/loops/"+
+                str(loop.source_robot_id)+
+                "_"+
+                str(loop.target_robot_id)+
+                "_"+
+                str(loop.source_key)+
+                "_"+str(loop.target_key)+
+                "_"+str(time.time())+".png")
     plt.clf()
     plt.close()
 
