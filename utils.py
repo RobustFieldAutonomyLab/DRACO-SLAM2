@@ -745,7 +745,8 @@ def flip_loops(loops:list) -> list:
         loop_fliped.target_robot_id = loop.source_robot_id
         loop_fliped.source_robot_id = loop.target_robot_id
         loop_fliped.estimated_transform = estimated_transform
-        loop_fliped.target_pose = loop.target_pose_their_frame.compose(estimated_transform)
+        loop_fliped.source_pose = loop.target_pose_their_frame
+        loop_fliped.target_pose = loop_fliped.source_pose.compose(estimated_transform)
         loop_fliped.cov = loop.cov
         loops_out.append(loop_fliped)
 
