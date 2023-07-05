@@ -419,8 +419,8 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
         indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
 
     else:
-        if len(robots[robot_id_source].best_possible_loops) == 0: return loop_list
-        source_key, robot_id_target, target_key = robots[robot_id_source].best_possible_loops
+        if robots[robot_id_source].best_possible_loops[robot_id_target] is None: return loop_list
+        source_key, target_key = robots[robot_id_source].best_possible_loops[robot_id_target]
         ring_key_index = source_key
         indexes = [target_key]
 

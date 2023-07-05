@@ -47,8 +47,10 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
         for robot_id_source in robots.keys():
             for robot_id_target in robots.keys():
                 if robot_id_target == robot_id_source: continue # do not search with self
-
                 robots[robot_id_source].points_partner[robot_id_target] = robots[robot_id_target].points
+
+                # perform an ALCS search
+                robots[robot_id_source].alcs(robot_id_target)
 
                 # Update the partner trajectory and account for comms
                 state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
@@ -77,7 +79,6 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
 
                 # check the status of the loop closure
                 if loop_.status:
-                    
                     if robots[robot_id_source].is_merged(robot_id_target):
                         valid_loops = [loop_]
                         plot_loop(loop_)
@@ -90,9 +91,10 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                         robots[robot_id_source].merge_slam(valid_loops) # merge my graph
                         flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
                         for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
-                        # robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
+                        robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
                         robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
-
+                        robots[robot_id_target].update_merge_log(robot_id_source) 
+                    
                     for valid in valid_loops: 
                         loop_list.append(valid)
                         # robots[robot_id_source].plot()

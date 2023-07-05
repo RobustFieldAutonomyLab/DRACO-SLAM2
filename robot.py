@@ -78,7 +78,7 @@ class Robot():
         self.loops_tested = {}
 
         self.dummy_cloud = create_full_cloud()
-        self.poses_needing_loops = None
+        self.poses_needing_loops = {}
         self.icp_count = 0
         self.merged = {}
         
@@ -138,6 +138,21 @@ class Robot():
 
         return robot in self.merged
     
+    def alcs(self, robot: int) -> None:
+        """Perform an active loop closure search (ALCS) step. 
+        Here we find some poses that need loops, find possible loop 
+        closures with them, and then select the best possible loop
+        closure. Note that this is performed with a specified robot. 
+
+        Args:
+            robot (int): the robot we want to do an alcs step with
+        """
+
+        if robot in self.merged: # we can only do alcs when the robots are merged
+            self.find_poses_needing_loops(robot)
+            self.search_for_possible_loops(robot)
+            self.simulate_loop_closure(robot)
+        
     def step(self) -> None:
         """Increase the step of SLAM
         """
@@ -147,10 +162,7 @@ class Robot():
             self.update_graph()
         self.slam_step += 1
         self.add_factors()
-        self.find_poses_needing_loops()
-        self.search_for_possible_loops()
         self.update_graph()
-        self.simulate_loop_closure()
         self.animate_step()
 
     def start_graph(self) -> None:
@@ -471,7 +483,7 @@ class Robot():
                 print(loop.true_source.between(loop.true_target))
                 print(loop.estimated_transform)
                 print("----------")
-'''
+            '''
             # parse some info
             source_symbol = X(loop.source_key)
             target_symbol = robot_to_symbol(loop.target_robot_id,loop.target_key)
@@ -534,60 +546,66 @@ class Robot():
         if flag: return len(trajectory) * 2 * 32 # return the cost if we actually need to send it
         else: return 0
         
-    def find_poses_needing_loops(self) -> None:
+    def find_poses_needing_loops(self, robot: int) -> None:
         """Find poses that need loop closures
+
+        Args:
+            robot (int): the robot we want to search with
         """
 
-        self.poses_needing_loops = {}
-        for robot in self.partner_robot_covariance:
-            robot_det_list = []
-            for i in self.partner_robot_covariance[robot]:
-                det = np.linalg.det(self.partner_robot_covariance[robot][i])
-                robot_det_list.append(det)
-                if det > .005:
-                    self.poses_needing_loops[(robot,i)] = True
+        self.poses_needing_loops[robot] = [] # clear before every step
+        for i in self.partner_robot_covariance[robot]: # loop over all the covariance matricies for this robot
+            det = np.linalg.det(self.partner_robot_covariance[robot][i])
+            if det > .005: # check the determinant 
+                self.poses_needing_loops[robot].append(i)
 
-    def search_for_possible_loops(self):
+    def search_for_possible_loops(self, robot: int) -> None:
         """Check for possible loop closures between robots. Only check poses that
         actually need a loop closure.
+
+        Args:
+            robot (int): the robot we want to check for possible loop closures with. 
         """
 
-        self.possible_loops = {}  
-        for i, (cloud, pose) in enumerate(zip(self.points,self.state_estimate)):
+        self.possible_loops[robot] = []  # clear before every step
+        for i, (_, pose) in enumerate(zip(self.points,self.state_estimate)): # loop over my poses
             pose = numpy_to_gtsam(pose)
-            for (robot_id, j) in self.poses_needing_loops:
-                if robot_id in self.multi_robot_frames and j in self.multi_robot_frames[robot_id]: continue
-                pose_two = self.partner_robot_state_estimates[robot_id][j]
-                pose_between = pose.between(pose_two)
+            for j in self.poses_needing_loops[robot]: # loop over the poses that need loops
+                # check if we have this pair as a loop closure already            
+                if robot in self.multi_robot_frames and j in self.multi_robot_frames[robot]: continue
+                pose_between = pose.between(self.partner_robot_state_estimates[robot][j]) # get the distance between 
                 if abs(pose_between.x()) <= 6 and abs(pose_between.y()) <= 6 and abs(np.degrees(pose_between.theta())) < 50:
-                    self.possible_loops[(i,robot_id,j)] = True
+                    self.possible_loops[robot].append([i,j]) # log if small enough
 
-    def simulate_loop_closure(self):
+    def simulate_loop_closure(self, robot: int) -> None:
         """Simulate the impact of the possible loop closures in self.possible loops. 
-        Log the best K loop closures. 
+        Keep only the best outcome. 
+
+        Args:
+            robot (int): the robot we want to search with
         """
 
         graph = gtsam.NonlinearFactorGraph()
         values = gtsam.Values()
         ratio_list = []
         loop_list = []
-        for (source_key, target_robot_id, target_key) in self.possible_loops:
+        for (source_key, target_key) in self.possible_loops[robot]:
             
             # check if we have ever tested this with ICP before
-            if (source_key, target_robot_id, target_key) in self.tested_loops: continue
+            if (source_key, robot, target_key) in self.tested_loops: continue
             
             # copy of isam combined
             isam = gtsam.ISAM2(self.isam_combined)
         
             # get the covariance at this pose before we insert the hypothetical loop closure
-            cov_before = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
+            cov_before = isam.marginalCovariance(robot_to_symbol(robot,target_key))
 
             # get the transform and package it
             one = numpy_to_gtsam(self.state_estimate[source_key])
-            two = self.partner_robot_state_estimates[target_robot_id][target_key]
+            two = self.partner_robot_state_estimates[robot][target_key]
             pose_between = one.between(two)
             factor = gtsam.BetweenFactorPose2(X(source_key),
-                                                robot_to_symbol(target_robot_id,target_key),
+                                                robot_to_symbol(robot,target_key),
                                                 pose_between,
                                                 self.prior_model) # TODO update noise model
             # insert and update isam 
@@ -597,17 +615,18 @@ class Robot():
             values.clear()
 
             # get the covariance at this pose after we add the loop closure
-            cov_after = isam.marginalCovariance(robot_to_symbol(target_robot_id,target_key))
+            cov_after = isam.marginalCovariance(robot_to_symbol(robot,target_key))
 
             # get the ratio of the determinants to grade the impact of this loop closure
             ratio = np.linalg.det(cov_after) / np.linalg.det(cov_before)
             ratio_list.append(ratio)
-            loop_list.append((source_key,target_robot_id,target_key))
+            loop_list.append((source_key,target_key))
 
-        self.best_possible_loops = ()
+        self.best_possible_loops[robot] = None
         if len(ratio_list) > 0:
-            self.best_possible_loops = loop_list[np.argmin(ratio_list)]
-            self.tested_loops[np.argmin(ratio_list)] = True # log 
+            self.best_possible_loops[robot] = loop_list[np.argmin(ratio_list)]
+            i,j = loop_list[np.argmin(ratio_list)]
+            self.tested_loops[(i,robot,j)] = True # log 
 
     def pass_data_cost(self) -> list:
         """Pass the cost of my most recent point cloud to 
