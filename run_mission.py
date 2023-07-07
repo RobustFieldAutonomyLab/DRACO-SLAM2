@@ -31,7 +31,7 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
 
     queue = []
     loop_list = []
-    mode = 0
+    mode = 1
 
     comm_link = CommLink()
 
@@ -92,8 +92,9 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
                         flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
                         for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
                         robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
-                        robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
-                        robots[robot_id_target].update_merge_log(robot_id_source) 
+                        if mode == 1:
+                            robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
+                            robots[robot_id_target].update_merge_log(robot_id_source) 
                     
                     for valid in valid_loops: 
                         loop_list.append(valid)
@@ -103,9 +104,9 @@ def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
     # plot each of the robots
     for robot in robots.keys():
         print(robots[robot].icp_count)
-        robots[robot].plot()
+        robots[robot].run_metrics(mode)
 
-    comm_link.plot()
+    comm_link.report(mode)
 
 run(sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,

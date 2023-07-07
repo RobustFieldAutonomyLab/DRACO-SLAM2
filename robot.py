@@ -4,6 +4,7 @@ import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse,Wedge
+import pickle
 
 import time
 
@@ -664,7 +665,7 @@ class Robot():
         for robot in self.partner_robot_exchange_costs.keys():
             self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
          
-    def run_metrics(self) -> None:
+    def run_metrics(self, mode: int) -> None:
         """Generate some metrics
         """
 
@@ -683,7 +684,6 @@ class Robot():
         rotational_error = np.array(rotational_error)
         self.mse = np.mean(euclidan_error)
         self.rmse = np.sqrt(np.mean(euclidan_error**2))
-        print(self.mse,self.rmse)
 
         # uncertainty
         team_uncertainty = {}
@@ -696,6 +696,14 @@ class Robot():
             team_uncertainty[robot] = (counter,temp)
         self.team_uncertainty = team_uncertainty
 
+        data_log = {}
+        data_log["mse"] = self.mse
+        data_log["rmse"] = self.rmse
+        data_log["covariance"] = self.partner_robot_covariance
+        data_log["icp"] = self.icp_count
+        with open('results/'+str(self.robot_id)+"_"+str(mode)+'.pickle', 'wb') as handle:
+            pickle.dump(data_log, handle)
+        
     def animate_step(self) -> None:
         
         plt.clf()
