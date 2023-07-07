@@ -4,3 +4,4 @@ __pycache__/*
 /old_notebooks/*
 /config/__pycache__/*
 animate/*
+/results/*
