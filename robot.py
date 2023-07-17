@@ -81,6 +81,7 @@ class Robot():
         self.dummy_cloud = create_full_cloud()
         self.poses_needing_loops = {}
         self.icp_count = 0
+        self.icp_success_count = 0
         self.merged = {}
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
@@ -475,22 +476,13 @@ class Robot():
                 if loop.target_key in self.multi_robot_frames[loop.target_robot_id]:
                     continue
                 
-            '''if self.is_merged(loop.target_robot_id) and self.robot_id == 1:
-                partner_est = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
-                print(loop.source_key,loop.target_key)
-                print(loop.source_robot_id,loop.target_robot_id)
-                print(partner_est)
-                print(loop.target_pose)
-                print(loop.true_source.between(loop.true_target))
-                print(loop.estimated_transform)
-                print("----------")
-            '''
+            self.icp_success_count += 1
+
             # parse some info
             source_symbol = X(loop.source_key)
             target_symbol = robot_to_symbol(loop.target_robot_id,loop.target_key)
             noise_model = self.create_noise_model(self.prior_sigmas) #TODO update noise model
             '''if robust:
-                print(loop.cov)
                 noise_model = self.create_robust_noise_model(self.prior_sigmas)'''
 
             # build a factor and add it
@@ -700,7 +692,9 @@ class Robot():
         data_log["mse"] = self.mse
         data_log["rmse"] = self.rmse
         data_log["covariance"] = self.partner_robot_covariance
-        data_log["icp"] = self.icp_count
+        data_log["my_covariance"] = self.covariance
+        data_log["icp_count"] = self.icp_count
+        data_log["icp_success_count"] = self.icp_success_count
         with open('results/'+str(self.robot_id)+"_"+str(mode)+'.pickle', 'wb') as handle:
             pickle.dump(data_log, handle)
         
@@ -776,10 +770,10 @@ class Robot():
                 e = Ellipse(xy=(pose.y(),pose.x()),width=sigma_y, height=sigma_x, angle=pose.theta())
                 ax.add_artist(e)
 
-                if (robot,i) not in self.poses_needing_loops:
-                    e.set_facecolor("black")
-                else:
+                if det > 0.005:
                     e.set_facecolor("red")
+                else:
+                    e.set_facecolor("black")
 
         plt.axis("square")
         plt.savefig("animate/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
