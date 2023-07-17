@@ -462,9 +462,13 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
             loop.source_robot_id = robot_id_source
             loop.target_robot_id = robot_id_target
             if robots[robot_id_source].is_merged(robot_id_target) == False:
+                start_time = time.time()
                 loop_out = reg.evaluate(loop,MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP)
+                robots[robot_id_source].draco_reg_time.append(time.time() - start_time)
             else:
-                loop_out = reg.evaluate(loop,10, 100000,100000000,.65)
+                start_time = time.time()
+                loop_out = reg.evaluate(loop,10, 100000,100000000,.85)
+                robots[robot_id_source].alcs_reg_time.append(time.time() - start_time)
             robots[robot_id_source].icp_count += 1
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
@@ -539,7 +543,8 @@ def plot_loop(loop:LoopClosure) -> None:
     fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(15, 15))
     '''ax1.scatter(loop.reg_points[:,0],loop.reg_points[:,1],c="blue")
     ax1.scatter(loop.target_points[:,0],loop.target_points[:,1],c="red")'''
-    plt.title(str(loop.overlap))
+    title = str(loop.overlap) + "_" + str(loop.context_diff)
+    plt.title(title)
 
     source_temp = transform_points(loop.source_points,loop.source_pose)
     target_temp = transform_points(loop.target_points,loop.target_pose)

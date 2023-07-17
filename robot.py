@@ -83,6 +83,11 @@ class Robot():
         self.icp_count = 0
         self.icp_success_count = 0
         self.merged = {}
+
+        self.pcm_run_time = []
+        self.alcs_run_time = []
+        self.alcs_reg_time = []
+        self.draco_reg_time = []
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -151,9 +156,11 @@ class Robot():
         """
 
         if robot in self.merged: # we can only do alcs when the robots are merged
+            start_time = time.time()
             self.find_poses_needing_loops(robot)
             self.search_for_possible_loops(robot)
             self.simulate_loop_closure(robot)
+            self.alcs_run_time.append(time.time() - start_time)
         
     def step(self) -> None:
         """Increase the step of SLAM
@@ -324,7 +331,9 @@ class Robot():
         assert(len(self.pcm_dict[robot_id]) != 0)
 
         valid_loops = []
+        start_time = time.time()
         valid_indexes = verify_pcm(self.pcm_dict[robot_id],self.min_pcm)
+        self.pcm_run_time.append(time.time() - start_time)
         for i in valid_indexes: 
             if self.pcm_dict[robot_id][i].inserted == False:
                 self.pcm_dict[robot_id][i].inserted = True
@@ -695,6 +704,10 @@ class Robot():
         data_log["my_covariance"] = self.covariance
         data_log["icp_count"] = self.icp_count
         data_log["icp_success_count"] = self.icp_success_count
+        data_log["pcm_run_time"] = self.pcm_run_time
+        data_log["alcs_reg_time"] = self.alcs_reg_time
+        data_log["alcs_run_time"] = self.alcs_run_time
+        data_log["draco_reg_time"] = self.draco_reg_time
         with open('results/'+str(self.robot_id)+"_"+str(mode)+'.pickle', 'wb') as handle:
             pickle.dump(data_log, handle)
         
