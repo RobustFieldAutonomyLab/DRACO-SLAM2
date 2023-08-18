@@ -115,6 +115,14 @@ print(np.mean(alcs_total_times),np.std(alcs_total_times))
 
 
 def get_team_uncertainty(log:dict) -> np.array:
+    """Get the total uncertainty of the team members in a multi-robot system.
+
+    Args:
+        log (dict): the incoming data log
+
+    Returns:
+        np.array: an array of the covariance matrix determinants
+    """
     
     steps = max(log[list(log.keys())[0]].keys())
     output = []
@@ -123,27 +131,43 @@ def get_team_uncertainty(log:dict) -> np.array:
         for robot in log.keys():
             val += np.linalg.det(log[robot][i])
         output.append(val)
+
     return output
 
-'''print("team uncertainty")
+print("team uncertainty")
+print("DRACO uncertainty")
+draco_uncertainty = {1:[],2:[],3:[]}
+for step in range(100):
+    for robot in range(1,4):
+        draco_uncertainty[robot].append(np.sum(get_team_uncertainty(slam_log_0[(robot,step)]["covariance"])))
 for robot in range(1,4):
-    uncertainty = get_team_uncertainty(slam_log_0[robot]["covariance"])
-    print("DRACO: ", np.sum(uncertainty))
-    
-print("-----------")
+    print(np.mean(draco_uncertainty[robot]),np.std(draco_uncertainty[robot]))
+
+print("ALCS uncertainty")
+alcs_uncertainty = {1:[],2:[],3:[]}
+for step in range(100):
+    for robot in range(1,4):
+        alcs_uncertainty[robot].append(np.sum(get_team_uncertainty(slam_log_1[(robot,step)]["covariance"])))
 for robot in range(1,4):
-    uncertainty = get_team_uncertainty(slam_log_1[robot]["covariance"])
-    print("ALCS: ", np.sum(uncertainty))
+    print(np.mean(alcs_uncertainty[robot]),np.std(alcs_uncertainty[robot]))
 
 print("my uncertainty")
+print("Draco")
+draco_self_uncertainty = {1:[],2:[],3:[]}
+for step in range(100):
+    for robot in range(1,4):
+        uncertainty = 0
+        for cov in slam_log_0[(robot,step)]["my_covariance"]: uncertainty += np.linalg.det(cov)
+        draco_self_uncertainty[robot].append(uncertainty)
 for robot in range(1,4):
-    uncertainty = 0
-    for cov in slam_log_0[robot]["my_covariance"]:
-        uncertainty += np.linalg.det(cov)
-    print(uncertainty)
-print("-----------")
+    print(np.mean(draco_self_uncertainty[robot]),np.std(draco_self_uncertainty[robot]))
+    
+print("ALCS")
+alcs_self_uncertainty = {1:[],2:[],3:[]}
+for step in range(100):
+    for robot in range(1,4):
+        uncertainty = 0
+        for cov in slam_log_1[(robot,step)]["my_covariance"]: uncertainty += np.linalg.det(cov)
+        alcs_self_uncertainty[robot].append(uncertainty)
 for robot in range(1,4):
-    uncertainty = 0
-    for cov in slam_log_1[robot]["my_covariance"]:
-        uncertainty += np.linalg.det(cov)
-    print(uncertainty)'''
+    print(np.mean(alcs_self_uncertainty[robot]),np.std(alcs_self_uncertainty[robot]))
