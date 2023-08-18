@@ -19,7 +19,6 @@ class Robot():
 
         self.slam_step = 0 # we want to track how far along the mission is, what SLAM step are we on
         self.total_steps = len(data["poses"])
-        print(self.total_steps)
 
         self.poses = data["poses"] # poses as numpy arrays
         self.poses_g = data["poses_g"] # poses from above but as gtsam.Pose2
@@ -27,6 +26,7 @@ class Robot():
         self.points_t = data["points_t"] # transformed points at each pose
         self.truth = data["truth"] # ground truth for each pose
         self.factors = data["factors"] # the factors in the graph
+        self.partner_truth = {} # the partner robots ground truth
 
         self.points_partner = {}
 
@@ -666,8 +666,12 @@ class Robot():
         for robot in self.partner_robot_exchange_costs.keys():
             self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
          
-    def run_metrics(self, mode: int) -> None:
-        """Generate some metrics
+    def run_metrics(self, mode: int, study_step: int) -> None:
+        """Get and save some metrics about the mission 
+
+        Args:
+            mode (int): the mode the mission was in 
+            study_step (int): the step in the study, the ith mission
         """
 
         euclidan_error = []
@@ -686,6 +690,24 @@ class Robot():
         self.mse = np.mean(euclidan_error)
         self.rmse = np.sqrt(np.mean(euclidan_error**2))
 
+        # How good are we are estimating our partners location
+        for robot in self.partner_robot_state_estimates.keys():
+
+            euclidan_error = []
+            rotational_error = []
+
+            truth_ref_frame = self.truth[0]
+            for step in self.partner_robot_state_estimates[robot].keys():
+                pose_est = self.partner_robot_state_estimates[robot][step]
+                pose_true = self.partner_truth[robot][step]
+                pose_true = truth_ref_frame.between(pose_true)
+                diff = pose_est.between(pose_true)
+                euclidan_error.append(np.sqrt(diff.x()**2 + diff.y()**2))
+                rotational_error.append(np.degrees(diff.theta()))
+            euclidan_error = np.array(euclidan_error)
+            rotational_error = np.array(rotational_error)
+            # print(np.mean(euclidan_error), np.sqrt(np.mean(euclidan_error**2)))
+
         # uncertainty
         team_uncertainty = {}
         for robot in self.partner_robot_state_estimates.keys():
@@ -696,6 +718,8 @@ class Robot():
                 counter.append(i)
             team_uncertainty[robot] = (counter,temp)
         self.team_uncertainty = team_uncertainty
+
+        # print(self.mse,self.rmse)
 
         data_log = {}
         data_log["mse"] = self.mse
@@ -708,7 +732,7 @@ class Robot():
         data_log["alcs_reg_time"] = self.alcs_reg_time
         data_log["alcs_run_time"] = self.alcs_run_time
         data_log["draco_reg_time"] = self.draco_reg_time
-        with open('results/'+str(self.robot_id)+"_"+str(mode)+'.pickle', 'wb') as handle:
+        with open('results/'+str(self.robot_id)+"_"+str(mode)+"_"+str(study_step)+'.pickle', 'wb') as handle:
             pickle.dump(data_log, handle)
         
     def animate_step(self) -> None:

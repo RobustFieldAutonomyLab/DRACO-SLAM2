@@ -1,3 +1,4 @@
+import sys
 import pickle
 import gtsam
 import numpy as np
@@ -11,108 +12,124 @@ from comm_link import CommLink
 
 from config.usmma import *
 
-def run(sampling_points,iterations,tolerance,max_translation,max_rotation,
+def run(mission,study_samples,total_slam_steps,
+        sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
         MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN):
     
-    # define a registration system
-    reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
+    
+    for study_step in range(study_samples):
+        print(study_step)
 
-    # Load up the data
-    data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/1.pickle",1)
-    data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/2.pickle",2)
-    data_three = load_data("/home/jake/Desktop/holoocean_bags/scrape/3.pickle",3)
-    data = {1:data_one,2:data_two,3:data_three}
+        # define a registration system
+        reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
 
-    robots = {}
-    robot_list = [1,2,3]
-    for key in data.keys():
-        robots[key] = Robot(key,data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
+        # Load up the data
+        data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_1.pickle",mission+"_1")
+        data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_2.pickle",mission+"_2")
+        data_three = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_3.pickle",mission+"_3")
+        data = {1:data_one,2:data_two,3:data_three}
 
-    queue = []
-    loop_list = []
-    mode = 1
+        robots = {}
+        robot_list = [1,2,3]
+        for key in data.keys():
+            robots[key] = Robot(key,data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
 
-    comm_link = CommLink()
+        # pass along the partner ground truth
+        for robot in robots.keys():
+            for partner in robots.keys():
+                if robot == partner: continue
+                robots[robot].partner_truth[partner] = robots[partner].truth
 
-    for slam_step in range(59):
-        print(slam_step)
+        queue = []
+        loop_list = []
+        mode = 1
 
-        # step the robots forward
-        for robot_id in robots.keys():
-            robots[robot_id].step()
-            comm_link.log_message(128) # log the descriptor sharing
+        comm_link = CommLink()
 
-        # search for loop closures
-        for robot_id_source in robots.keys():
-            for robot_id_target in robots.keys():
-                if robot_id_target == robot_id_source: continue # do not search with self
-                robots[robot_id_source].points_partner[robot_id_target] = robots[robot_id_target].points
+        
+        for slam_step in range(total_slam_steps):
 
-                # perform an ALCS search
-                robots[robot_id_source].alcs(robot_id_target)
+            # step the robots forward
+            for robot_id in robots.keys():
+                robots[robot_id].step()
+                comm_link.log_message(128) # log the descriptor sharing
 
-                # Update the partner trajectory and account for comms
-                state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
-                comm_link.log_message(state_cost)
-                    
-                # perform some loop closure search
-                loops = search_for_loops(reg,
-                                        robots,
-                                        comm_link,
-                                        robot_id_source,
-                                        robot_id_target,
-                                        MIN_POINTS,
-                                        RATIO_POINTS,
-                                        CONTEXT_DIFFERENCE,
-                                        MIN_OVERLAP,
-                                        MAX_TREE_DIST,
-                                        KNN)
-            
-                # only keep going if we found any loop closures
-                if len(loops) == 0: continue
-                loop_, loop_search_status = keep_best_loop(loops) # retain only the best loop from the batch
-                if loop_search_status == False: continue # make sure the best loop not outlier
+            # search for loop closures
+            for robot_id_source in robots.keys():
+                for robot_id_target in robots.keys():
+                    if robot_id_target == robot_id_source: continue # do not search with self
+                    robots[robot_id_source].points_partner[robot_id_target] = robots[robot_id_target].points
 
-                # do some book keeping
-                loop_.place_loop(robots[robot_id_source].get_pose_gtsam_at_index(loop_.source_key))
+                    # perform an ALCS search
+                    robots[robot_id_source].alcs(robot_id_target)
 
-                # check the status of the loop closure
-                if loop_.status:
-                    if robots[robot_id_source].is_merged(robot_id_target):
-                        valid_loops = [loop_]
-                        plot_loop(loop_)
-                    else: # update and solve PCM
-                        robots[robot_id_source].add_loop_to_pcm_queue(loop_)
-                        valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
-
-                    # if we have a valid solution from PCM, merge the graphs
-                    if len(valid_loops) > 0:
-                        robots[robot_id_source].merge_slam(valid_loops) # merge my graph
-                        flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
-                        for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
-                        robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
-                        if mode == 1:
-                            robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
-                            robots[robot_id_target].update_merge_log(robot_id_source) 
-                    
-                    for valid in valid_loops: 
-                        loop_list.append(valid)
-                        # robots[robot_id_source].plot()
-                        # robots[robot_id_target].plot()
+                    # Update the partner trajectory and account for comms
+                    state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,robots[robot_id_target].state_estimate)
+                    comm_link.log_message(state_cost)
                         
-    # plot each of the robots
-    for robot in robots.keys():
-        print(robots[robot].icp_count)
-        robots[robot].run_metrics(mode)
+                    # perform some loop closure search
+                    loops = search_for_loops(reg,
+                                            robots,
+                                            comm_link,
+                                            robot_id_source,
+                                            robot_id_target,
+                                            MIN_POINTS,
+                                            RATIO_POINTS,
+                                            CONTEXT_DIFFERENCE,
+                                            MIN_OVERLAP,
+                                            MAX_TREE_DIST,
+                                            KNN)
+                
+                    # only keep going if we found any loop closures
+                    if len(loops) == 0: continue
+                    loop_, loop_search_status = keep_best_loop(loops) # retain only the best loop from the batch
+                    if loop_search_status == False: continue # make sure the best loop not outlier
 
-    comm_link.report(mode)
+                    # do some book keeping
+                    loop_.place_loop(robots[robot_id_source].get_pose_gtsam_at_index(loop_.source_key))
 
-run(sampling_points,iterations,tolerance,max_translation,max_rotation,
+                    # check the status of the loop closure
+                    if loop_.status:
+                        if robots[robot_id_source].is_merged(robot_id_target):
+                            valid_loops = [loop_]
+                            # plot_loop(loop_)
+                        else: # update and solve PCM
+                            robots[robot_id_source].add_loop_to_pcm_queue(loop_)
+                            valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
+                            # for l in valid_loops:
+                            #    plot_loop(l)
+
+                        # if we have a valid solution from PCM, merge the graphs
+                        if len(valid_loops) > 0:
+                            robots[robot_id_source].merge_slam(valid_loops) # merge my graph
+                            flipped_valid_loops = flip_loops(valid_loops) # flip and send the loops
+                            for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
+                            robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
+                            if mode == 1:
+                                robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
+                                robots[robot_id_target].update_merge_log(robot_id_source) 
+                        
+                        for valid in valid_loops: 
+                            loop_list.append(valid)
+                            # robots[robot_id_source].plot()
+                            # robots[robot_id_target].plot()
+                            
+        # plot each of the robots
+        for robot in robots.keys():
+            robots[robot].run_metrics(mode,study_step)
+
+        comm_link.report(mode,study_step)
+
+def main():
+    _, mission,study_samples,total_slam_steps = sys.argv
+    run(mission,int(study_samples),int(total_slam_steps),
+        sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
         MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN)
 
-
+if __name__ == "__main__":
+    main()
 
 
             
