@@ -44,10 +44,7 @@ def run(mission,study_samples,total_slam_steps,
         queue = []
         loop_list = []
         mode = 1
-
         comm_link = CommLink()
-
-        
         for slam_step in range(total_slam_steps):
 
             # step the robots forward
@@ -123,6 +120,8 @@ def run(mission,study_samples,total_slam_steps,
 
 def main():
     _, mission,study_samples,total_slam_steps = sys.argv
+    if mission == "plane": MIN_OVERLAP = 0.85
+    else: MIN_OVERLAP = 0.65
     run(mission,int(study_samples),int(total_slam_steps),
         sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
