@@ -666,10 +666,11 @@ class Robot():
         for robot in self.partner_robot_exchange_costs.keys():
             self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
          
-    def run_metrics(self, mode: int, study_step: int) -> None:
+    def run_metrics(self, mission: str, mode: int, study_step: int) -> None:
         """Get and save some metrics about the mission 
 
         Args:
+            mission(str): the mission we are running 
             mode (int): the mode the mission was in 
             study_step (int): the step in the study, the ith mission
         """
@@ -732,7 +733,7 @@ class Robot():
         data_log["alcs_reg_time"] = self.alcs_reg_time
         data_log["alcs_run_time"] = self.alcs_run_time
         data_log["draco_reg_time"] = self.draco_reg_time
-        with open('results/'+str(self.robot_id)+"_"+str(mode)+"_"+str(study_step)+'.pickle', 'wb') as handle:
+        with open('results/'+mission+"/"+str(self.robot_id)+"_"+str(mode)+"_"+str(study_step)+'.pickle', 'wb') as handle:
             pickle.dump(data_log, handle)
         
     def animate_step(self) -> None:

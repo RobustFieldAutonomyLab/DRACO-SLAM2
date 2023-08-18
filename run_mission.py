@@ -17,7 +17,6 @@ def run(mission,study_samples,total_slam_steps,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
         MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN):
     
-    
     for study_step in range(study_samples):
         print(study_step)
 
@@ -31,7 +30,6 @@ def run(mission,study_samples,total_slam_steps,
         data = {1:data_one,2:data_two,3:data_three}
 
         robots = {}
-        robot_list = [1,2,3]
         for key in data.keys():
             robots[key] = Robot(key,data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
 
@@ -41,11 +39,10 @@ def run(mission,study_samples,total_slam_steps,
                 if robot == partner: continue
                 robots[robot].partner_truth[partner] = robots[partner].truth
 
-        queue = []
         loop_list = []
         mode = 1
         comm_link = CommLink()
-        for slam_step in range(total_slam_steps):
+        for _ in range(total_slam_steps):
 
             # step the robots forward
             for robot_id in robots.keys():
@@ -94,8 +91,6 @@ def run(mission,study_samples,total_slam_steps,
                         else: # update and solve PCM
                             robots[robot_id_source].add_loop_to_pcm_queue(loop_)
                             valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
-                            # for l in valid_loops:
-                            #    plot_loop(l)
 
                         # if we have a valid solution from PCM, merge the graphs
                         if len(valid_loops) > 0:
@@ -109,14 +104,11 @@ def run(mission,study_samples,total_slam_steps,
                         
                         for valid in valid_loops: 
                             loop_list.append(valid)
-                            # robots[robot_id_source].plot()
-                            # robots[robot_id_target].plot()
                             
         # plot each of the robots
         for robot in robots.keys():
-            robots[robot].run_metrics(mode,study_step)
-
-        comm_link.report(mode,study_step)
+            robots[robot].run_metrics(mission,mode,study_step)
+        comm_link.report(mission,mode,study_step)
 
 def main():
     _, mission,study_samples,total_slam_steps = sys.argv
