@@ -14,8 +14,9 @@ class Registration():
     """
 
     def __init__(self,sampling_points,iterations,tolerance,max_translation,max_rotation) -> None:
+
         self.icp = GI_ICP(sampling_points,iterations,tolerance,max_translation,max_rotation)
-        self.icp_two = GI_ICP(100,5,0.01,5,np.radians(30.))
+        self.icp_two = GI_ICP(sampling_points,iterations,tolerance,max_translation,np.radians(max_rotation))
 
     def predict(self,points:np.array,samples:int) -> np.array:
         """Predict the covariance if we call ICP on this point cloud
@@ -116,7 +117,7 @@ class Registration():
         
     def evaluate(self,loop:LoopClosure,
                  min_points:int, ratio_points:float, 
-                 context_difference:int, min_overlap:float) -> LoopClosure:
+                 context_difference:int, min_overlap:float,alt=False) -> LoopClosure:
         """Evaluate a potential loop closure using ICP and several outlier rejection methods.
 
         Args:
@@ -160,7 +161,10 @@ class Registration():
                 return loop
             
         # use the global optimizer to init the ICP call
-        init_status, go_icp_result = self.icp.initialize(loop.source_points,loop.target_points)
+        if alt:
+            init_status, go_icp_result = self.icp_two.initialize(loop.source_points,loop.target_points)
+        else:
+            init_status, go_icp_result = self.icp.initialize(loop.source_points,loop.target_points)
         if init_status == False:
             loop.status = False
             loop.message = "GI Failure"
@@ -171,7 +175,10 @@ class Registration():
         loop.gi_transform = numpy_to_gtsam(go_icp_result.x)
 
         # 4. check the overlap and get the fit score
-        overlap, fit_score = self.icp.overlap(loop.source_points_init,loop.target_points)
+        if alt:
+            overlap, fit_score = self.icp_two.overlap(loop.source_points_init,loop.target_points)
+        else:
+            overlap, fit_score = self.icp.overlap(loop.source_points_init,loop.target_points)
         loop.overlap = overlap
         if min_overlap != -1:
             if overlap < min_overlap:
@@ -184,7 +191,10 @@ class Registration():
         loop.cov = np.eye(3) * loop.fit_score * 20.0
 
         # refine the transform estimate using standard ICP
-        icp_status, icp_transform = self.icp.refine(loop.source_points_init, loop.target_points)
+        if alt:
+            icp_status, icp_transform = self.icp_two.refine(loop.source_points_init, loop.target_points)
+        else:
+            icp_status, icp_transform = self.icp.refine(loop.source_points_init, loop.target_points)
 
         if icp_status == False:
             loop.status = False

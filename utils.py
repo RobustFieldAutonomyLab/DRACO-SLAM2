@@ -376,7 +376,7 @@ def do_loops(reg,robots:dict,comm_link,robot_id_source:int,
         robots[robot_id_source].icp_count += 1
         if loop.status:
             loop_out.place_loop(robots[robot_id_source].get_pose_gtsam())
-            print(loop.estimated_transform,loop.true_source.between(loop.true_target))
+            # print(loop.estimated_transform,loop.true_source.between(loop.true_target))
             loop_out.source_robot_id = robot_id_source
             loop_out.target_robot_id = robot_id_target                
             loops.append(loop_out)
@@ -417,6 +417,7 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
         source_context = robots[robot_id_source].get_context() # pull the context image at source   
 
         indexes = indexes[distances <= MAX_TREE_DIST] # filter the infinites
+        submap_size = 1
 
     else:
         if robots[robot_id_source].best_possible_loops[robot_id_target] is None: return loop_list
@@ -424,7 +425,8 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
         ring_key_index = source_key
         indexes = [target_key]
 
-        source_points = robots[robot_id_source].get_robot_points(ring_key_index,1) # pull the cloud at source
+        submap_size = 1
+        source_points = robots[robot_id_source].get_robot_points(ring_key_index,submap_size) # pull the cloud at source
         source_context = robots[robot_id_source].get_context() # pull the context image at source
 
     count = 0
@@ -446,7 +448,7 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
             comms_cost_point_clouds = robots[robot_id_target].get_data(required_data)
             comm_link.log_message(comms_cost_point_clouds)
 
-            target_points = robots[robot_id_target].get_robot_points(j,1) # pull the cloud at target
+            target_points = robots[robot_id_target].get_robot_points(j,submap_size) # pull the cloud at target
             target_context = robots[robot_id_target].get_context_index(j) # pull the context image at target
             target_pose_their_frame = robots[robot_id_target].state_estimate[j] # the target robots jth pose in it's own ref frame
             
@@ -467,7 +469,7 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                 robots[robot_id_source].draco_reg_time.append(time.time() - start_time)
             else:
                 start_time = time.time()
-                loop_out = reg.evaluate(loop,10, 100000,100000000,.85)
+                loop_out = reg.evaluate(loop,10, 100000,100000000,.85,alt=False)
                 robots[robot_id_source].alcs_reg_time.append(time.time() - start_time)
             robots[robot_id_source].icp_count += 1
             if loop_out.ratio is not None:                
