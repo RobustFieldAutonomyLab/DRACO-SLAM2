@@ -493,6 +493,17 @@ class Robot():
             noise_model = self.create_noise_model(self.prior_sigmas) #TODO update noise model
             '''if robust:
                 noise_model = self.create_robust_noise_model(self.prior_sigmas)'''
+            
+            if loop.method == "alcs":
+                print(self.slam_step)
+                print(loop.source_robot_id,loop.target_robot_id,loop.source_key,loop.target_key)
+                print(loop.estimated_transform)
+                temp_source = numpy_to_gtsam(self.state_estimate[loop.source_key])
+                temp_target = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
+                test_transform = temp_source.between(temp_target)
+                print(test_transform)
+                print("---------")
+
 
             # build a factor and add it
             factor = gtsam.BetweenFactorPose2(source_symbol,
@@ -752,13 +763,14 @@ class Robot():
         # w.set_facecolor("black")
         
         # plot the partner robot trajectory
+        colors = {1:"blue",2:"purple",3:"orange"}
         for robot in self.partner_robot_state_estimates.keys():
             temp = []
             for frame in sorted(self.partner_robot_state_estimates[robot].keys()):
                 pose = self.partner_robot_state_estimates[robot][frame]
                 temp.append([pose.y(),pose.x()])
             temp = np.array(temp)
-            plt.plot(temp[:,0],temp[:,1])
+            plt.plot(temp[:,0],temp[:,1],c=colors[robot])
 
         # plot inter robot loop closures
         for loop in self.inter_robot_loop_closures:
@@ -778,20 +790,33 @@ class Robot():
         truth_in_my_frame = np.array(truth_in_my_frame)
         plt.plot(truth_in_my_frame[:,0],truth_in_my_frame[:,1],c="black",linestyle='dashed')
 
+        # ground truth of partner robots
+        for robot in self.partner_truth:
+            temp = est_zero.compose(truth_zero.inverse())
+            temp = temp.compose(self.partner_truth[robot][0])
+            plot_list = []
+            for row in self.partner_truth[robot]:
+                between = self.partner_truth[robot][0].between(row)
+                plot_pose = temp.compose(between)
+                plot_list.append([plot_pose.x(),plot_pose.y()])
+            plot_list = np.array(plot_list)
+            plt.plot(plot_list[:,1],plot_list[:,0],c=colors[robot],linestyle='dashed')
+
         # draw the point clouds
         for cloud,pose in zip(self.points,self.state_estimate):
                 cloud = transform_points(cloud,numpy_to_gtsam(pose))
                 plt.scatter(cloud[:,1],cloud[:,0],c="black",s=5)
 
-        '''for loop in self.possible_loops:
-            i, r, j = loop
-            if i >= len(self.state_estimate): continue
-            one = numpy_to_gtsam(self.state_estimate[i])
-            if j >= len(self.partner_robot_state_estimates[r]): continue
-            two = self.partner_robot_state_estimates[r][j]
-            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="green")
+        for robot in self.possible_loops.keys():
+            if len(self.possible_loops[robot]) == 0: continue
+            for (i,j) in self.possible_loops[robot]:
+                if i >= len(self.state_estimate): continue
+                one = numpy_to_gtsam(self.state_estimate[i])
+                if j >= len(self.partner_robot_state_estimates[robot]): continue
+                two = self.partner_robot_state_estimates[robot][j]
+                plt.plot([one.y(),two.y()],[one.x(),two.x()],c="green")
         
-        if len(self.best_possible_loops) != 0:
+        '''if len(self.best_possible_loops) != 0:
             i, r, j = self.best_possible_loops
             one = numpy_to_gtsam(self.state_estimate[i])
             two = self.partner_robot_state_estimates[r][j]

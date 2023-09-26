@@ -42,7 +42,7 @@ def run(mission,study_samples,total_slam_steps,
         loop_list = []
         mode = 1
         comm_link = CommLink()
-        for _ in range(total_slam_steps):
+        for slam_step in range(total_slam_steps):
 
             # step the robots forward
             for robot_id in robots.keys():
@@ -104,6 +104,12 @@ def run(mission,study_samples,total_slam_steps,
                         
                         for valid in valid_loops: 
                             loop_list.append(valid)
+                            # if valid.method == "alcs":
+                            '''print(slam_step)
+                            print(robot_id_source,robot_id_target)
+                            print(valid.source_robot_id,valid.target_robot_id,valid.source_key,valid.target_key)
+                            print("------------")
+                            plot_loop(valid)'''
                             
         # plot each of the robots
         for robot in robots.keys():
@@ -112,8 +118,6 @@ def run(mission,study_samples,total_slam_steps,
 
 def main():
     _, mission,study_samples,total_slam_steps = sys.argv
-    if mission == "plane": MIN_OVERLAP = 0.85
-    else: MIN_OVERLAP = 0.65
     run(mission,int(study_samples),int(total_slam_steps),
         sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,

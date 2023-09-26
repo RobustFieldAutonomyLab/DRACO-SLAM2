@@ -469,8 +469,9 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                 robots[robot_id_source].draco_reg_time.append(time.time() - start_time)
             else:
                 start_time = time.time()
-                loop_out = reg.evaluate(loop,10, 100000,100000000,.85,alt=False)
+                loop_out = reg.evaluate(loop,10, 100000,100000000,.60,alt=False)
                 robots[robot_id_source].alcs_reg_time.append(time.time() - start_time)
+                loop_out.method = "alcs"
             robots[robot_id_source].icp_count += 1
             if loop_out.ratio is not None:                
                 loop_list.append(loop_out)
@@ -578,8 +579,7 @@ def plot_loop(loop:LoopClosure) -> None:
                 str(loop.target_robot_id)+
                 "_"+
                 str(loop.source_key)+
-                "_"+str(loop.target_key)+
-                "_"+str(time.time())+".png")
+                "_"+str(loop.target_key)+".png")
     plt.clf()
     plt.close()
 
