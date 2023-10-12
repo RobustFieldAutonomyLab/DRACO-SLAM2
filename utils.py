@@ -88,7 +88,7 @@ def get_ground_truth(path:str,id:int,stamps:list) -> list:
     bag.close()
     return out
 
-def load_data(file_path:str,index:int) -> dict:
+def load_data(file_path:str,index:int,real_data=False) -> dict:
     """Load in the data from a single robot. Data is loaded
     as a python dictionary.
 
@@ -96,6 +96,7 @@ def load_data(file_path:str,index:int) -> dict:
         file_path (str): path to the pickle file that is a log of the 
         single robot SLAM mission
         index (int): the index of the robot to read the ground truth from it's bag file
+        real_data (bool): is this real world data?
 
     Returns:
         dict: the compiled data for a single robot
@@ -113,7 +114,10 @@ def load_data(file_path:str,index:int) -> dict:
     points_one = data_one["points"]
     points_t_one = data_one["points_t"]
     time_one =  data_one["time_stamps"]
-    truth_one = get_ground_truth(None,index,time_one) # get the ground truth
+    if real_data == False:
+        truth_one = get_ground_truth(None,index,time_one) # get the ground truth
+    else:
+        truth_one = None
 
     # populate a dictionary with all the data
     data = {}
@@ -385,7 +389,8 @@ def do_loops(reg,robots:dict,comm_link,robot_id_source:int,
         
 
 def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_target:int,
-                     MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float,MAX_TREE_DIST:int,KNN:int) -> list:
+                     MIN_POINTS:int,RATIO_POINTS:int,CONTEXT_DIFFERENCE:int,MIN_OVERLAP:float,MAX_TREE_DIST:int,KNN:int,
+                     alcs_overlap) -> list:
     """Search for loops between the most recent frame in robot_id_source and all the frames in robot_id_target. 
     Apply ICP between any possible loop closures. We package these loop closures and return them as a list.
 
@@ -458,9 +463,11 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                                target_points,
                                source_context,
                                target_context,
-                               target_pose_their_frame,
-                               true_source=robots[robot_id_source].truth[ring_key_index],
-                               true_target=robots[robot_id_target].truth[j])
+                               target_pose_their_frame)
+            
+            if robots[robot_id_source].truth is not None: loop.true_source = robots[robot_id_source].truth[ring_key_index]
+            if robots[robot_id_target].truth is not None: loop.true_target = robots[robot_id_target].truth[j]
+
             loop.source_robot_id = robot_id_source
             loop.target_robot_id = robot_id_target
             if robots[robot_id_source].is_merged(robot_id_target) == False:
@@ -469,7 +476,8 @@ def search_for_loops(reg,robots:dict,comm_link,robot_id_source:int,robot_id_targ
                 robots[robot_id_source].draco_reg_time.append(time.time() - start_time)
             else:
                 start_time = time.time()
-                loop_out = reg.evaluate(loop,10, 100000,100000000,.60,alt=False)
+                # 60, 85
+                loop_out = reg.evaluate(loop,10, 100000,100000000,alcs_overlap,alt=False)
                 robots[robot_id_source].alcs_reg_time.append(time.time() - start_time)
                 loop_out.method = "alcs"
             robots[robot_id_source].icp_count += 1
@@ -535,7 +543,7 @@ def keep_best_loop(loops:list) -> LoopClosure:
     else:
         return None, False
 
-def plot_loop(loop:LoopClosure) -> None:
+def plot_loop(loop:LoopClosure, mission:str) -> None:
     """Plot a loop closure using matplotlib
 
     Args:
@@ -556,24 +564,26 @@ def plot_loop(loop:LoopClosure) -> None:
     ax1.scatter(target_temp[:,0],-target_temp[:,1],c="red")
     ax1.axis("square")
 
-    source_temp = transform_points(loop.source_points,loop.true_source)
-    target_temp = transform_points(loop.target_points,loop.true_target)
+    if loop.true_source is not None:
+        
+        source_temp = transform_points(loop.source_points,loop.true_source)
+        target_temp = transform_points(loop.target_points,loop.true_target)
 
-    ax2.scatter(source_temp[:,0],-source_temp[:,1],c="blue")
-    ax2.scatter(target_temp[:,0],-target_temp[:,1],c="red")
-    ax2.axis("square")
+        ax2.scatter(source_temp[:,0],-source_temp[:,1],c="blue")
+        ax2.scatter(target_temp[:,0],-target_temp[:,1],c="red")
+        ax2.axis("square")
 
-    if loop.status and loop.grade:
-        fig.suptitle("True Positive",fontsize=20)
-    elif loop.status and loop.grade == False:
-        fig.suptitle("False Positive",fontsize=20)
-    elif loop.status == False and loop.grade:
-        fig.suptitle("False Negative",fontsize=20)
-    elif loop.status == False and loop.grade == False:
-        fig.suptitle("True Negative",fontsize=20)
+        if loop.status and loop.grade:
+            fig.suptitle("True Positive",fontsize=20)
+        elif loop.status and loop.grade == False:
+            fig.suptitle("False Positive",fontsize=20)
+        elif loop.status == False and loop.grade:
+            fig.suptitle("False Negative",fontsize=20)
+        elif loop.status == False and loop.grade == False:
+            fig.suptitle("True Negative",fontsize=20)
 
     plt.axis("square")
-    plt.savefig("animate/loops/"+
+    plt.savefig("animate/"+mission+"/"+"loops/"+
                 str(loop.source_robot_id)+
                 "_"+
                 str(loop.target_robot_id)+

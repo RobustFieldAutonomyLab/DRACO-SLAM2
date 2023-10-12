@@ -15,23 +15,30 @@ from config.usmma import *
 def run(mission,study_samples,total_slam_steps,
         sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
-        MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN):
+        MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN,
+        mode,alcs_overlap,min_uncertainty):
+    
+    mode = int(mode)
+    alcs_overlap = float(alcs_overlap)
+    min_uncertainty = float(min_uncertainty)
     
     for study_step in range(study_samples):
-        print(study_step)
 
         # define a registration system
         reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
 
         # Load up the data
-        data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_1.pickle",mission+"_1")
-        data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_2.pickle",mission+"_2")
-        data_three = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_3.pickle",mission+"_3")
+        data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_1.pickle",mission+"_1",False)
+        data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_2.pickle",mission+"_2",False)
+        data_three = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_3.pickle",mission+"_3",False)
         data = {1:data_one,2:data_two,3:data_three}
 
         robots = {}
         for key in data.keys():
             robots[key] = Robot(key,data[key],SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING)
+            robots[key].mission = mission
+            robots[key].mode = int(mode)
+            robots[key].min_uncertainty = min_uncertainty
 
         # pass along the partner ground truth
         for robot in robots.keys():
@@ -40,9 +47,11 @@ def run(mission,study_samples,total_slam_steps,
                 robots[robot].partner_truth[partner] = robots[partner].truth
 
         loop_list = []
-        mode = 1
         comm_link = CommLink()
-        for slam_step in range(total_slam_steps):
+        # plane 80
+        # usmma_sim 60
+        # summa real 103
+        for _ in range(total_slam_steps):
 
             # step the robots forward
             for robot_id in robots.keys():
@@ -73,7 +82,8 @@ def run(mission,study_samples,total_slam_steps,
                                             CONTEXT_DIFFERENCE,
                                             MIN_OVERLAP,
                                             MAX_TREE_DIST,
-                                            KNN)
+                                            KNN,
+                                            alcs_overlap)
                 
                     # only keep going if we found any loop closures
                     if len(loops) == 0: continue
@@ -104,6 +114,7 @@ def run(mission,study_samples,total_slam_steps,
                         
                         for valid in valid_loops: 
                             loop_list.append(valid)
+                            plot_loop(valid,mission)
                             # if valid.method == "alcs":
                             '''print(slam_step)
                             print(robot_id_source,robot_id_target)
@@ -117,11 +128,20 @@ def run(mission,study_samples,total_slam_steps,
         comm_link.report(mission,mode,study_step)
 
 def main():
-    _, mission,study_samples,total_slam_steps = sys.argv
+    _, mission,study_samples,total_slam_steps, mode, alcs_overlap, min_uncertainty = sys.argv
+
+    print("running mission")
+    print("Mission: ", mission)
+    print("Study Samples: ",study_samples)
+    print("Slam Steps: ", total_slam_steps)
+    print("Mode: ", mode)
+    print("alcs_overlap: ",alcs_overlap)
+    print("Min Uncertainty: ",min_uncertainty)
     run(mission,int(study_samples),int(total_slam_steps),
         sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
-        MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN)
+        MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN,
+        mode,alcs_overlap,min_uncertainty)
 
 if __name__ == "__main__":
     main()

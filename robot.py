@@ -88,6 +88,11 @@ class Robot():
         self.alcs_run_time = []
         self.alcs_reg_time = []
         self.draco_reg_time = []
+
+        self.is_shutdown = False
+        self.mission = ""
+        self.mode = None
+        self.min_uncertainty = None
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -155,6 +160,7 @@ class Robot():
             robot (int): the robot we want to do an alcs step with
         """
 
+        
         if robot in self.merged: # we can only do alcs when the robots are merged
             start_time = time.time()
             self.find_poses_needing_loops(robot)
@@ -169,8 +175,10 @@ class Robot():
         if self.slam_step == 0:
             self.start_graph()
             self.update_graph()
-        self.slam_step += 1
-        self.add_factors()
+        if self.slam_step + 1 >= self.total_steps: self.is_shutdown = True
+        if self.is_shutdown == False:
+            self.slam_step += 1
+            self.add_factors()
         self.update_graph()
         self.animate_step()
 
@@ -494,7 +502,7 @@ class Robot():
             '''if robust:
                 noise_model = self.create_robust_noise_model(self.prior_sigmas)'''
             
-            if loop.method == "alcs":
+            '''if loop.method == "alcs":
                 print(self.slam_step)
                 print(loop.source_robot_id,loop.target_robot_id,loop.source_key,loop.target_key)
                 print(loop.estimated_transform)
@@ -502,7 +510,7 @@ class Robot():
                 temp_target = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
                 test_transform = temp_source.between(temp_target)
                 print(test_transform)
-                print("---------")
+                print("---------")'''
 
 
             # build a factor and add it
@@ -569,7 +577,7 @@ class Robot():
         self.poses_needing_loops[robot] = [] # clear before every step
         for i in self.partner_robot_covariance[robot]: # loop over all the covariance matricies for this robot
             det = np.linalg.det(self.partner_robot_covariance[robot][i])
-            if det > .005: # check the determinant 
+            if det > self.min_uncertainty: # .0005: # check the determinant 
                 self.poses_needing_loops[robot].append(i)
 
     def search_for_possible_loops(self, robot: int) -> None:
@@ -690,35 +698,36 @@ class Robot():
         rotational_error = []
 
         # euclidian error and rotation
-        truth_ref_frame = self.truth[0] 
-        for pose_est, pose_true in zip(self.state_estimate,self.truth):
-            pose_est = numpy_to_gtsam(pose_est)
-            pose_true = truth_ref_frame.between(pose_true)
-            diff = pose_est.between(pose_true)
-            euclidan_error.append(np.sqrt(diff.x()**2 + diff.y()**2))
-            rotational_error.append(np.degrees(diff.theta()))
-        euclidan_error = np.array(euclidan_error)
-        rotational_error = np.array(rotational_error)
-        self.mse = np.mean(euclidan_error)
-        self.rmse = np.sqrt(np.mean(euclidan_error**2))
-
-        # How good are we are estimating our partners location
-        for robot in self.partner_robot_state_estimates.keys():
-
-            euclidan_error = []
-            rotational_error = []
-
-            truth_ref_frame = self.truth[0]
-            for step in self.partner_robot_state_estimates[robot].keys():
-                pose_est = self.partner_robot_state_estimates[robot][step]
-                pose_true = self.partner_truth[robot][step]
+        if self.truth is not None:
+            truth_ref_frame = self.truth[0] 
+            for pose_est, pose_true in zip(self.state_estimate,self.truth):
+                pose_est = numpy_to_gtsam(pose_est)
                 pose_true = truth_ref_frame.between(pose_true)
                 diff = pose_est.between(pose_true)
                 euclidan_error.append(np.sqrt(diff.x()**2 + diff.y()**2))
                 rotational_error.append(np.degrees(diff.theta()))
             euclidan_error = np.array(euclidan_error)
             rotational_error = np.array(rotational_error)
-            # print(np.mean(euclidan_error), np.sqrt(np.mean(euclidan_error**2)))
+            self.mse = np.mean(euclidan_error)
+            self.rmse = np.sqrt(np.mean(euclidan_error**2))
+
+            # How good are we are estimating our partners location
+            for robot in self.partner_robot_state_estimates.keys():
+
+                euclidan_error = []
+                rotational_error = []
+
+                truth_ref_frame = self.truth[0]
+                for step in self.partner_robot_state_estimates[robot].keys():
+                    pose_est = self.partner_robot_state_estimates[robot][step]
+                    pose_true = self.partner_truth[robot][step]
+                    pose_true = truth_ref_frame.between(pose_true)
+                    diff = pose_est.between(pose_true)
+                    euclidan_error.append(np.sqrt(diff.x()**2 + diff.y()**2))
+                    rotational_error.append(np.degrees(diff.theta()))
+                euclidan_error = np.array(euclidan_error)
+                rotational_error = np.array(rotational_error)
+                # print(np.mean(euclidan_error), np.sqrt(np.mean(euclidan_error**2)))
 
         # uncertainty
         team_uncertainty = {}
@@ -780,27 +789,28 @@ class Robot():
             plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
 
         # ground truth as dotted line
-        truth_zero = self.truth[0]
-        est_zero = numpy_to_gtsam(self.state_estimate[0])
-        truth_in_my_frame = []
-        for row in self.truth[:len(self.state_estimate)]:
-           between = truth_zero.between(row)
-           temp = est_zero.compose(between)
-           truth_in_my_frame.append([temp.y(),temp.x()])
-        truth_in_my_frame = np.array(truth_in_my_frame)
-        plt.plot(truth_in_my_frame[:,0],truth_in_my_frame[:,1],c="black",linestyle='dashed')
+        if self.truth is not None:
+            truth_zero = self.truth[0]
+            est_zero = numpy_to_gtsam(self.state_estimate[0])
+            truth_in_my_frame = []
+            for row in self.truth[:len(self.state_estimate)]:
+                between = truth_zero.between(row)
+                temp = est_zero.compose(between)
+                truth_in_my_frame.append([temp.y(),temp.x()])
+            truth_in_my_frame = np.array(truth_in_my_frame)
+            plt.plot(truth_in_my_frame[:,0],truth_in_my_frame[:,1],c="black",linestyle='dashed')
 
-        # ground truth of partner robots
-        for robot in self.partner_truth:
-            temp = est_zero.compose(truth_zero.inverse())
-            temp = temp.compose(self.partner_truth[robot][0])
-            plot_list = []
-            for row in self.partner_truth[robot]:
-                between = self.partner_truth[robot][0].between(row)
-                plot_pose = temp.compose(between)
-                plot_list.append([plot_pose.x(),plot_pose.y()])
-            plot_list = np.array(plot_list)
-            plt.plot(plot_list[:,1],plot_list[:,0],c=colors[robot],linestyle='dashed')
+            # ground truth of partner robots
+            for robot in self.partner_truth:
+                temp = est_zero.compose(truth_zero.inverse())
+                temp = temp.compose(self.partner_truth[robot][0])
+                plot_list = []
+                for row in self.partner_truth[robot]:
+                    between = self.partner_truth[robot][0].between(row)
+                    plot_pose = temp.compose(between)
+                    plot_list.append([plot_pose.x(),plot_pose.y()])
+                plot_list = np.array(plot_list)
+                # plt.plot(plot_list[:,1],plot_list[:,0],c=colors[robot],linestyle='dashed')
 
         # draw the point clouds
         for cloud,pose in zip(self.points,self.state_estimate):
@@ -838,8 +848,13 @@ class Robot():
                 else:
                     e.set_facecolor("black")
 
+        if self.mode == 1: 
+            mode_name = "ALCS"
+        else: 
+            mode_name = "DRACO"
+
         plt.axis("square")
-        plt.savefig("animate/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
+        plt.savefig("animate/"+str(self.mission)+"/"+str(mode_name)+"/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
         
         plt.clf()
         plt.close()
