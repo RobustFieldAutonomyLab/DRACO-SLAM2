@@ -499,8 +499,9 @@ class Robot():
             source_symbol = X(loop.source_key)
             target_symbol = robot_to_symbol(loop.target_robot_id,loop.target_key)
             noise_model = self.create_noise_model(self.prior_sigmas) #TODO update noise model
-            '''if robust:
-                noise_model = self.create_robust_noise_model(self.prior_sigmas)'''
+            if loop.method == "alcs":
+                print("using robust noise model")
+                noise_model = self.create_robust_noise_model(self.prior_sigmas)
             
             '''if loop.method == "alcs":
                 print(self.slam_step)
@@ -762,7 +763,7 @@ class Robot():
         fig, ax = plt.subplots()
 
         # title
-        plt.title("ROBOT: " + str(self.robot_id))
+        # plt.title("ROBOT: " + str(self.robot_id))
         
         # my own trajectory
         plt.plot(self.state_estimate[:,1],self.state_estimate[:,0],c="black")
@@ -786,7 +787,7 @@ class Robot():
             one = numpy_to_gtsam(self.state_estimate[loop.source_key])
             if loop.target_key >= len(self.partner_robot_state_estimates[loop.target_robot_id]): continue
             two = self.partner_robot_state_estimates[loop.target_robot_id][loop.target_key]
-            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="red")
+            plt.plot([one.y(),two.y()],[one.x(),two.x()],c="cyan",zorder=5)
 
         # ground truth as dotted line
         if self.truth is not None:
@@ -810,7 +811,7 @@ class Robot():
                     plot_pose = temp.compose(between)
                     plot_list.append([plot_pose.x(),plot_pose.y()])
                 plot_list = np.array(plot_list)
-                # plt.plot(plot_list[:,1],plot_list[:,0],c=colors[robot],linestyle='dashed')
+                plt.plot(plot_list[:,1],plot_list[:,0],c=colors[robot],linestyle='dashed')
 
         # draw the point clouds
         for cloud,pose in zip(self.points,self.state_estimate):
@@ -840,13 +841,13 @@ class Robot():
                 det = np.linalg.det(cov)
                 sigma_x = np.sqrt(cov[0][0])
                 sigma_y = np.sqrt(cov[1][1])
-                e = Ellipse(xy=(pose.y(),pose.x()),width=sigma_y, height=sigma_x, angle=pose.theta())
+                '''e = Ellipse(xy=(pose.y(),pose.x()),width=sigma_y, height=sigma_x, angle=pose.theta())
                 ax.add_artist(e)
 
                 if det > 0.005:
                     e.set_facecolor("red")
                 else:
-                    e.set_facecolor("black")
+                    e.set_facecolor("black")'''
 
         if self.mode == 1: 
             mode_name = "ALCS"
@@ -854,8 +855,9 @@ class Robot():
             mode_name = "DRACO"
 
         plt.axis("square")
+        plt.xticks([])
+        plt.yticks([])
         plt.savefig("animate/"+str(self.mission)+"/"+str(mode_name)+"/"+str(self.robot_id)+"/"+str(self.slam_step)+".png")
-        
         plt.clf()
         plt.close()
 
