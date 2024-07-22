@@ -51,12 +51,12 @@ def rot_to_euler(matrix : np.array) -> float:
     theta = Rotation.from_matrix(matrix).as_euler("xyz")[2]
     return theta
 
-def get_ground_truth(path:str,id:int,stamps:list) -> list:
+def get_ground_truth(path:str,id:str,stamps:list) -> list:
     """Get a ground truth trajectory using the timestamps from a SLAM run
 
     Args:
         path (str): _description_
-        id (int): the id of the robot mission (1,2,3,etc.)
+        id (str): the id of the robot mission (1,2,3,etc.)
         stamps (list): the list of timestamps from the slam keyframes
 
     Returns:
@@ -88,14 +88,14 @@ def get_ground_truth(path:str,id:int,stamps:list) -> list:
     bag.close()
     return out
 
-def load_data(file_path:str,index:int,real_data=False) -> dict:
+def load_data(file_path:str,index:str,real_data=False) -> dict:
     """Load in the data from a single robot. Data is loaded
     as a python dictionary.
 
     Args:
         file_path (str): path to the pickle file that is a log of the 
         single robot SLAM mission
-        index (int): the index of the robot to read the ground truth from it's bag file
+        index (str): the index of the robot to read the ground truth from it's bag file
         real_data (bool): is this real world data?
 
     Returns:
