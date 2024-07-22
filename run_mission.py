@@ -12,15 +12,42 @@ from comm_link import CommLink
 
 from config.usmma import *
 
-def run(mission,study_samples,total_slam_steps,
+def run(sim,mission,study_samples,total_slam_steps,
         sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
         MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN,
         mode,alcs_overlap,min_uncertainty):
     
-    mode = int(mode)
+
+    '''sim: if you are using simulated data or not, if True, the data loader grabs ground truth information
+    mission, a string of the misson name, options are "plane" "usmma" "usmma_real"
+    study_samples, how many times you want to run this single slam misson
+    total_slam_steps, the number of steps you want to step in this slam mission
+    sampling_points, parameter for global ICP, see SHGO docs
+    iterations,parameter for global ICP, see SHGO docs
+    tolerance, parameter for global ICP, see SHGO docs
+    max_translation, parameter for global ICP, see SHGO docs, the largest translation it will check
+    max_rotation, parameter for global ICP, see SHGO docs, the largest rotation it will check
+    SUBMAP_SIZE, the number of frames before and after the current keyframe
+    BEARING_BINS, scan context number of bearing bins
+    RANGE_BINS, scan context number of range bins
+    MAX_RANGE, the max range for scan context
+    MAX_BEARING, the max bearing for scan context
+    MIN_POINTS, the minimum points to try registration
+    RATIO_POINTS, the ratio of points to try registration 
+    CONTEXT_DIFFERENCE, the max context difference
+    MIN_OVERLAP, the min overlap to accept a loop closure
+    MAX_TREE_DIST,KNN, the max tree distance to accept a loop closure
+    mode, DRACO (0) or ALCS (1)
+    alcs_overlap, the overlap needed for ALCS
+    min_uncertainty, the min unceratinaty for ALCS'''
+    
+    mode = int(mode) 
     alcs_overlap = float(alcs_overlap)
     min_uncertainty = float(min_uncertainty)
+    sim = sim == "True"
+
+    print(sim)
     
     for study_step in range(study_samples):
 
@@ -28,9 +55,9 @@ def run(mission,study_samples,total_slam_steps,
         reg = Registration(sampling_points,iterations,tolerance,max_translation,max_rotation)
 
         # Load up the data
-        data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_1.pickle",mission+"_1",False)
-        data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_2.pickle",mission+"_2",False)
-        data_three = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_3.pickle",mission+"_3",False)
+        data_one = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_1.pickle",mission+"_1",sim)
+        data_two = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_2.pickle",mission+"_2",sim)
+        data_three = load_data("/home/jake/Desktop/holoocean_bags/scrape/"+mission+"_3.pickle",mission+"_3",sim)
         data = {1:data_one,2:data_two,3:data_three}
 
         robots = {}
@@ -123,12 +150,13 @@ def run(mission,study_samples,total_slam_steps,
                             plot_loop(valid)'''
                             
         # plot each of the robots
-        for robot in robots.keys():
+        '''for robot in robots.keys():
             robots[robot].run_metrics(mission,mode,study_step)
         comm_link.report(mission,mode,study_step)
-
+        '''
+        
 def main():
-    _, mission,study_samples,total_slam_steps, mode, alcs_overlap, min_uncertainty = sys.argv
+    _, sim, mission,study_samples,total_slam_steps, mode, alcs_overlap, min_uncertainty = sys.argv
 
     print("running mission")
     print("Mission: ", mission)
@@ -137,7 +165,7 @@ def main():
     print("Mode: ", mode)
     print("alcs_overlap: ",alcs_overlap)
     print("Min Uncertainty: ",min_uncertainty)
-    run(mission,int(study_samples),int(total_slam_steps),
+    run(sim,mission,int(study_samples),int(total_slam_steps),
         sampling_points,iterations,tolerance,max_translation,max_rotation,
         SUBMAP_SIZE,BEARING_BINS,RANGE_BINS,MAX_RANGE,MAX_BEARING,
         MIN_POINTS,RATIO_POINTS,CONTEXT_DIFFERENCE,MIN_OVERLAP,MAX_TREE_DIST,KNN,
