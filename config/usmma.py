@@ -17,4 +17,4 @@ max_rotation = np.radians(100.)
 MIN_POINTS = 75
 RATIO_POINTS = 2.0         
 CONTEXT_DIFFERENCE = 100
-MIN_OVERLAP = 0.65 # plane 0.85 usmma_sim 0.65
+MIN_OVERLAP = 0.85 # 0.65 # plane 0.85 usmma_sim 0.65
