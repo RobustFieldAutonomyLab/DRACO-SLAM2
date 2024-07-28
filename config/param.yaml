@@ -1,0 +1,37 @@
+# Dump all parameters here
+
+# different per dataset
+dataset:
+  sim: True              # if you are using simulated data or not
+                         # if True, the data loader grabs ground truth information
+  mission: "usmma"       # "plane" "usmma" "usmma_real"
+  study_samples: 1       # number of re-run
+  total_slam_steps: 103  # number of steps in the slam mission
+                         # plane 80, usmma_sim 60, summa real 103
+  num_robots: 3          # number of robots in the dataset
+  mode: 0                # DRACO (0) or ALCS (1)
+  min_uncertainty: 0.015 # minimum uncertainty for ALCS
+
+global_icp: # parameter for global ICP, see SHGO docs
+  sampling_points: 500
+  iterations: 5
+  tolerance: 0.01
+  max_translation: 10 # largest translation, m
+  max_rotation: 100   # largest rotation, degree
+
+scan_context:
+  submap_size: 1 # number of frames before and after one keyframe
+  bearing_bins: 100 # number of bearing bins
+  range_bins: 16    # number of range bins
+  max_range: 40     # max range
+  max_bearing: 180  # max bearing
+
+loop_closure:
+  min_points: 75          # minimum points to try registration
+  ratio_points: 2.0       # ratio of points to try registration
+  context_difference: 100 # the max context difference
+  min_overlap: 0.85       # minimum overlap to accept a loop closure
+                          # plane: 0.85 usmma_sim: 0.65
+  max_tree_dist: 20       # max Kdtree distance to accept a loop closure
+  knn: 5                  # number of neighbors for kd search
+  alcs_overlap: 0.55      # overlap needed for ALCS
