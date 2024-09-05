@@ -12,6 +12,11 @@ dataset:
   mode: 0                # DRACO (0) or ALCS (1)
   min_uncertainty: 0.015 # minimum uncertainty for ALCS
 
+  object_detection:
+    object_icp: config/object_icp.yaml
+    model: models/real_data_model.h5
+    feature_extraction: config/feature.yaml
+
 global_icp: # parameter for global ICP, see SHGO docs
   sampling_points: 500
   iterations: 5
@@ -35,3 +40,4 @@ loop_closure:
   max_tree_dist: 20       # max Kdtree distance to accept a loop closure
   knn: 5                  # number of neighbors for kd search
   alcs_overlap: 0.55      # overlap needed for ALCS
+

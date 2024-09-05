@@ -127,6 +127,7 @@ def load_data(file_path: str, real_data=False, bag_path=None) -> dict:
     data["points_t"] = points_t_one  # transformed points at each pose
     data["truth"] = truth_one  # ground truth for each pose
     data["factors"] = data_one["factors"]  # the factors in the graph
+    data["images"] = data_one["images"]  # the images at each pose
 
     return data
 

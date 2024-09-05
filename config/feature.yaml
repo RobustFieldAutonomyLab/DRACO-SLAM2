@@ -1,0 +1,126 @@
+
+
+# Constant false alarm rate (CFAR) params for feature extraction
+CFAR:
+  Ntc: 40 # number of training cells
+  Ngc: 20 # number of guard cells
+  Pfa: 0.1 #false alarm rate
+  rank: 10 # matrix rank
+  alg: 'SOCA' # method of CFAR, see cfar.cpp for options. SOCA is best.
+
+# point cloud filtering params
+filter:
+  threshold: 85 # the min CFAR response to be added to the point cloud
+  resolution: 0.3 # voxel downsampling res
+  radius: 1.0 # outlier rejection radius
+  min_points: 2 # outlier rejection min points
+  skip: 1 # how often to skip a point cloud, use 1
+
+# the vis params
+visualization:
+  coordinates: 'cartesian'
+  radius: 2
+  color: [0, 165, 255]
+
+# are we using compressed imagary
+compressed_images: True
+
+# configurations for sonar
+sonar_config:
+  name: 'Hovering'
+  world: 'USMMALevel'
+  main_agent: 'auv0'
+  ticks_per_sec: 200
+  frames_per_sec: true
+  octree_min: 0.1
+  octree_max: 5.0
+  agents: [
+    {
+      "agent_name": "auv0",
+      "agent_type": "HoveringAUV",
+      "sensors": [
+        {
+          "sensor_type": "PoseSensor",
+          "socket": "IMUSocket"
+        },
+        {
+          "sensor_type": "VelocitySensor",
+          "socket": "IMUSocket"
+        },
+        {
+          "sensor_type": "IMUSensor",
+          "socket": "IMUSocket",
+          "Hz": 200,
+          "configuration": {
+            "AccelSigma": 0.00277,
+            "AngVelSigma": 0.00123,
+            "AccelBiasSigma": 0.00141,
+            "AngVelBiasSigma": 0.00388,
+            "ReturnBias": true
+          }
+        },
+        {
+          "sensor_type": "GPSSensor",
+          "socket": "IMUSocket",
+          "Hz": 5,
+          "configuration":{
+            "Sigma": 0.5,
+            "Depth": 1,
+            "DepthSigma": 0.25
+          }
+        },
+        {
+          "sensor_type": "DVLSensor",
+          "socket": "DVLSocket",
+          "Hz": 20,
+          "configuration": {
+            "Elevation": 22.5,
+            "VelSigma": 0.02626,
+            "ReturnRange": true,
+            "MaxRange": 50,
+            "RangeSigma": 0.1,
+            "DebugLines": false
+          }
+        },
+        {
+          "sensor_type": "DepthSensor",
+          "socket": "DepthSocket",
+          "Hz": 100,
+          "configuration": {
+            "Sigma": 0.255
+          }
+        },
+        {
+          "sensor_type": "ImagingSonar",
+          "sensor_name": "HorizontalSonar",
+          "socket": "SonarSocket",
+          "Hz": 5,
+          "configuration": {
+            "RangeBins": 512,
+            "AzimuthBins": 512,
+            "RangeMin": 0,
+            "RangeMax": 30,
+            "InitOctreeRange": 50,
+            "Elevation": 20,
+            "Azimuth": 120,
+            "AzimuthStreaks": -1,
+            "ScaleNoise": true,
+            "AddSigma": 0.08,
+            "MultSigma": 0.2,
+            "RangeSigma": 0.1,
+            "MultiPath": false
+          }
+        }
+      ],
+      "control_scheme": 0,
+      "location": [22,-18,-1.0],
+      "rotation": [0.0, 0.0, 90],
+
+      "location_1": [-16,-20,-1.0],
+      "location_2": [22,-18,-1.0],
+      "location_3": [-18,18,-1.0]
+    }
+  ]
+
+  window_width:  1280
+  window_height: 720

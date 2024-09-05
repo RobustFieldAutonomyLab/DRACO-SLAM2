@@ -11,6 +11,9 @@ import time
 from slam.utils import create_full_cloud,get_all_context,get_points,verify_pcm, X, robot_to_symbol, numpy_to_gtsam,transform_points
 
 from slam.loop_closure import LoopClosure
+from slam.object_detection import Keyframe
+from slam.object_mapper import ObjectMapper
+
 
 class Robot():
     def __init__(self, robot_id: int, data: dict, run_config: dict, sc_config: dict):
@@ -26,6 +29,7 @@ class Robot():
         self.points_t = data["points_t"] # transformed points at each pose
         self.truth = data["truth"] # ground truth for each pose
         self.factors = data["factors"] # the factors in the graph
+        self.images = data["images"] # the images at each pose
 
         self.partner_truth = {} # the partner robots ground truth
 
@@ -88,6 +92,11 @@ class Robot():
         self.mission = run_config['mission']
         self.mode = run_config['mode']
         self.min_uncertainty = run_config['min_uncertainty']
+
+        # object_detection_params = {"object_icp": "config/object_icp.yaml",
+        #                            "model": "models/sim_model.h5",
+        #                            "feature_extraction": "config/feature.yaml"}
+        self.object_detection = ObjectMapper(robot_id, run_config['object_detection'])
         
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -166,16 +175,20 @@ class Robot():
     def step(self, path: str) -> None:
         """Increase the step of SLAM
         """
-
+        keyframe = Keyframe(self.poses[self.slam_step],
+                            self.images[self.slam_step],
+                            self.points[self.slam_step])
+        self.object_detection.add_object(keyframe)
         if self.slam_step == 0:
             self.start_graph()
             self.update_graph()
-        if self.slam_step + 1 >= self.total_steps: self.is_shutdown = True
-        if self.is_shutdown == False:
+        if self.slam_step + 1 >= self.total_steps:
+            self.is_shutdown = True
+        if not self.is_shutdown:
             self.slam_step += 1
             self.add_factors()
         self.update_graph()
-        self.animate_step(path)
+        # self.animate_step(path)
 
     def start_graph(self) -> None:
         """Start the SLAM graph by inserting the prior.

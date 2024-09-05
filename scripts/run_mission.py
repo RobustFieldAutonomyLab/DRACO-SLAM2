@@ -5,7 +5,6 @@ from slam.registration import Registration
 from slam.robot import Robot
 import slam.utils as utils
 
-
 def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
     with open(input_yaml, 'r') as file:
         config = yaml.safe_load(file)
@@ -48,56 +47,58 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
             comm_link.log_message(128)  # log the descriptor sharing
 
         # search for loop closures
-        for robot_id_source in robots.keys():
-            for robot_id_target in robots.keys():
-                if robot_id_target == robot_id_source:
-                    continue  # do not search with self
-                robots[robot_id_source].points_partner[robot_id_target] = robots[robot_id_target].points
+        search = False
+        if search:
+            for robot_id_source in robots.keys():
+                for robot_id_target in robots.keys():
+                    if robot_id_target == robot_id_source:
+                        continue  # do not search with self
+                    robots[robot_id_source].points_partner[robot_id_target] = robots[robot_id_target].points
 
-                # perform an ALCS search
-                robots[robot_id_source].alcs(robot_id_target)
+                    # perform an ALCS search
+                    robots[robot_id_source].alcs(robot_id_target)
 
-                # Update the partner trajectory and account for comms
-                state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,
-                                                                               robots[robot_id_target].state_estimate)
-                comm_link.log_message(state_cost)
+                    # Update the partner trajectory and account for comms
+                    state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,
+                                                                                   robots[robot_id_target].state_estimate)
+                    comm_link.log_message(state_cost)
 
-                # perform some loop closure search
-                loops = utils.search_for_loops(reg, robots, comm_link,
-                                               robot_id_source, robot_id_target, config['loop_closure'])
+                    # perform some loop closure search
+                    loops = utils.search_for_loops(reg, robots, comm_link,
+                                                   robot_id_source, robot_id_target, config['loop_closure'])
 
-                # only keep going if we found any loop closures
-                if len(loops) == 0:
-                    continue
-                loop_, best_loop = utils.keep_best_loop(loops) # retain only the best loop from the batch
-                if not best_loop:
-                    # make sure the best loop is not outlier
-                    continue
+                    # only keep going if we found any loop closures
+                    if len(loops) == 0:
+                        continue
+                    loop_, best_loop = utils.keep_best_loop(loops) # retain only the best loop from the batch
+                    if not best_loop:
+                        # make sure the best loop is not outlier
+                        continue
 
-                # do some bookkeeping
-                loop_.place_loop(robots[robot_id_source].get_pose_gtsam_at_index(loop_.source_key))
+                    # do some bookkeeping
+                    loop_.place_loop(robots[robot_id_source].get_pose_gtsam_at_index(loop_.source_key))
 
-                # check the status of the loop closure
-                if loop_.status:
-                    if robots[robot_id_source].is_merged(robot_id_target):
-                        valid_loops = [loop_]
-                    else: # update and solve PCM
-                        robots[robot_id_source].add_loop_to_pcm_queue(loop_)
-                        valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
+                    # check the status of the loop closure
+                    if loop_.status:
+                        if robots[robot_id_source].is_merged(robot_id_target):
+                            valid_loops = [loop_]
+                        else: # update and solve PCM
+                            robots[robot_id_source].add_loop_to_pcm_queue(loop_)
+                            valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
 
-                    # if we have a valid solution from PCM, merge the graphs
-                    if len(valid_loops) > 0:
-                        robots[robot_id_source].merge_slam(valid_loops) # merge my graph
-                        flipped_valid_loops = utils.flip_loops(valid_loops) # flip and send the loops
-                        for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
-                        robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
-                        if run_info['mode']:
-                            robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
-                            robots[robot_id_target].update_merge_log(robot_id_source)
+                        # if we have a valid solution from PCM, merge the graphs
+                        if len(valid_loops) > 0:
+                            robots[robot_id_source].merge_slam(valid_loops) # merge my graph
+                            flipped_valid_loops = utils.flip_loops(valid_loops) # flip and send the loops
+                            for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
+                            robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
+                            if run_info['mode']:
+                                robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
+                                robots[robot_id_target].update_merge_log(robot_id_source)
 
-                    for valid in valid_loops:
-                        loop_list.append(valid)
-                        utils.plot_loop(valid,f"{output_folder}{mission}/loop/")
+                        for valid in valid_loops:
+                            loop_list.append(valid)
+                            utils.plot_loop(valid,f"{output_folder}{mission}/loop/")
 
 
 def main():
