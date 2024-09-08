@@ -16,6 +16,7 @@ dataset:
     object_icp: config/object_icp.yaml
     model: models/real_data_model.h5
     feature_extraction: config/feature.yaml
+    graph_matching: config/graph.yaml
 
 global_icp: # parameter for global ICP, see SHGO docs
   sampling_points: 500

@@ -5,6 +5,7 @@ from slam.registration import Registration
 from slam.robot import Robot
 import slam.utils as utils
 
+
 def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
     with open(input_yaml, 'r') as file:
         config = yaml.safe_load(file)
@@ -24,7 +25,7 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
         else:
             bag_path = None
         data_this_robot = utils.load_data(pickle_path, not sim, bag_path)
-        data_robots[i+1] = data_this_robot
+        data_robots[i + 1] = data_this_robot
 
     robots = {}
     for key in data_robots.keys():
@@ -60,7 +61,8 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
 
                     # Update the partner trajectory and account for comms
                     state_cost = robots[robot_id_source].update_partner_trajectory(robot_id_target,
-                                                                                   robots[robot_id_target].state_estimate)
+                                                                                   robots[
+                                                                                       robot_id_target].state_estimate)
                     comm_link.log_message(state_cost)
 
                     # perform some loop closure search
@@ -70,7 +72,7 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
                     # only keep going if we found any loop closures
                     if len(loops) == 0:
                         continue
-                    loop_, best_loop = utils.keep_best_loop(loops) # retain only the best loop from the batch
+                    loop_, best_loop = utils.keep_best_loop(loops)  # retain only the best loop from the batch
                     if not best_loop:
                         # make sure the best loop is not outlier
                         continue
@@ -82,23 +84,23 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
                     if loop_.status:
                         if robots[robot_id_source].is_merged(robot_id_target):
                             valid_loops = [loop_]
-                        else: # update and solve PCM
+                        else:  # update and solve PCM
                             robots[robot_id_source].add_loop_to_pcm_queue(loop_)
                             valid_loops = robots[robot_id_source].do_pcm(robot_id_target)
 
                         # if we have a valid solution from PCM, merge the graphs
                         if len(valid_loops) > 0:
-                            robots[robot_id_source].merge_slam(valid_loops) # merge my graph
-                            flipped_valid_loops = utils.flip_loops(valid_loops) # flip and send the loops
+                            robots[robot_id_source].merge_slam(valid_loops)  # merge my graph
+                            flipped_valid_loops = utils.flip_loops(valid_loops)  # flip and send the loops
                             for i in range(len(flipped_valid_loops)): comm_link.log_message(96 + 16 + 16)
-                            robots[robot_id_target].merge_slam(flipped_valid_loops) # merge the partner robot graph
+                            robots[robot_id_target].merge_slam(flipped_valid_loops)  # merge the partner robot graph
                             if run_info['mode']:
-                                robots[robot_id_source].update_merge_log(robot_id_target) # log that we have merged
+                                robots[robot_id_source].update_merge_log(robot_id_target)  # log that we have merged
                                 robots[robot_id_target].update_merge_log(robot_id_source)
 
                         for valid in valid_loops:
                             loop_list.append(valid)
-                            utils.plot_loop(valid,f"{output_folder}{mission}/loop/")
+                            utils.plot_loop(valid, f"{output_folder}{mission}/loop/")
 
 
 def main():

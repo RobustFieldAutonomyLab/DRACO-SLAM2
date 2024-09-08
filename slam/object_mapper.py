@@ -1,4 +1,5 @@
 import numpy as np
+import yaml
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
 from slam.object_detection import *
@@ -24,6 +25,7 @@ def transform_point(point, pose):
 class Object:
     def __init__(self, points, pose, bounding_box, obj_type):
         # list[ndarray]:untransformed points of the object
+        self.id = -1
         self.points_raw = [points]
         # list[ndarray]: poses where the object is detected
         self.pose = [pose]
@@ -41,6 +43,9 @@ class Object:
         self.bounding_box_transformed = transform_points(self.bounding_box_raw[0], pose)
         # ndarray: center of the object
         self.center = np.mean(self.points_transformed, axis=0)
+
+    def __lt__(self, other: 'Object'):
+        return self.id < other.id
 
     def compare_points(self, other: 'Object'):
         # Build KD-Trees for fast nearest-neighbor search
@@ -75,6 +80,11 @@ class Object:
         self.center = np.mean(self.points_transformed, axis=0)
 
 
+def calculate_center_distance(object0: Object, object1: Object):
+    # TODO: maybe try using distance between clouds?
+    return np.linalg.norm(object0.center - object1.center)
+
+
 class ObjectMapper:
     def __init__(self, robot_ns, config):
         self.robot_ns = robot_ns
@@ -86,10 +96,18 @@ class ObjectMapper:
         self.width = self.object_detector.feature_extractor.width
         self.height = self.object_detector.feature_extractor.height
 
-        self.objects = []
+        self.objects = {}
+        self.edges = []
         self.points = np.empty((0, 2))
         self.poses = np.empty((0, 3))
         self.object_counter = 0
+
+        # graph construction and matching parameters
+        with open(config["graph_matching"], 'r') as file:
+            config_graph = yaml.safe_load(file)
+
+        self.max_edge_distance = config_graph["edge"]["max_distance"]
+        self.min_node_distance = config_graph["node"]["min_distance_accept"]
 
     def add_object(self, keyframe: Keyframe):
         dict_result = self.object_detector.segmentImage(keyframe)
@@ -111,15 +129,17 @@ class ObjectMapper:
                                  self.pixel2meter(np.array(bounding_box)),
                                  dict_result['probs'][i])
                 merged = False
-                for obj_old in self.objects:
-                    if obj_old.compare_points(obj_new) < 2:
+                for obj_old in self.objects.values():
+                    if obj_old.compare_points(obj_new) < self.min_node_distance:
                         obj_old.update(obj_new)
                         merged = True
                         break
                 if not merged:
+                    obj_new.id = self.object_counter
                     self.objects[self.object_counter] = obj_new
                     self.object_counter += 1
-        print("number of objects: ", len(self.objects))
+                    self.reconstruct_edges()
+                    print(self.edges)
         self.plot_figure()
 
     def pixel2meter(self, locs):
@@ -128,6 +148,16 @@ class ObjectMapper:
         y = (-1 * (locs[:, 0] / float(self.rows)) * self.height) + self.height
         points = np.column_stack((y, -x))
         return points
+
+    def reconstruct_edges(self):
+        self.edges.clear()
+        nodes_list = list(self.objects.values())
+        for i, node0 in enumerate(nodes_list):
+            for j in range(i + 1, len(nodes_list)):
+                node1 = nodes_list[j]
+                dist = calculate_center_distance(node0, node1)
+                if dist < self.max_edge_distance:
+                    self.edges.append((node0.id, node1.id, dist))
 
     def plot_figure(self):
 
@@ -138,7 +168,7 @@ class ObjectMapper:
         #
         # plt.scatter(cloud[:, 0], cloud[:, 1], s=1, c='g')
 
-        for obj in self.objects:
+        for obj in self.objects.values():
             plt.plot(obj.points_transformed[:, 0], obj.points_transformed[:, 1], 'lightblue')
             if obj.object_type == 0:
                 color = 'r'
