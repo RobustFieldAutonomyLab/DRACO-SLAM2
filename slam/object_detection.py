@@ -472,7 +472,7 @@ class ObjectDetection:
 
                     # if there are more than 30 CFAR points and the bounding box is not near an
                     # print("pointsSubset: ", len(pointsSubset))
-                    if len(pointsSubset) > 5:
+                    if len(pointsSubset) > 15:
 
                         # copy the image 10 times
                         queries = []
@@ -481,7 +481,7 @@ class ObjectDetection:
 
                         # package and predict
                         queries = np.expand_dims(queries, axis=3)
-                        predictions = self.model.predict(queries)
+                        predictions = self.model.predict(queries, verbose=0)
 
                         # get the mean and variance of the predictions
                         avg = np.mean(predictions, axis=0)

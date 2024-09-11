@@ -3,7 +3,7 @@ import yaml
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
 from slam.object_detection import *
-import cvxpy as cp
+from scipy.optimize import linear_sum_assignment
 
 
 # Everything related to the object map
@@ -44,6 +44,8 @@ class Object:
         self.bounding_box_transformed = transform_points(self.bounding_box_raw[0], pose)
         # ndarray: center of the object
         self.center = np.mean(self.points_transformed, axis=0)
+        # for logging graph matching results
+        self.associated_object_id = -1
 
     def __lt__(self, other: 'Object'):
         return self.id < other.id
@@ -101,7 +103,7 @@ def get_principal_eigen_vector(mat):
 
     # Get the principal eigenvector
     principal_eigenvector = eigenvectors[:, principal_eigenvalue_index]
-    return principal_eigenvector
+    return np.abs(principal_eigenvector)
 
 
 class ObjectMapper:
@@ -133,6 +135,7 @@ class ObjectMapper:
         self.min_num_edge = config_graph["edge"]["min_number"]
         self.match_use_type = config_graph["matching"]["use_type"]
         self.mu = config_graph["matching"]["mu"]
+        self.min_eigenvector_accept = config_graph["matching"]["min_eigenvector_accept"]
 
     def add_object(self, keyframe: Keyframe):
         dict_result = self.object_detector.segmentImage(keyframe)
@@ -165,7 +168,7 @@ class ObjectMapper:
                     self.object_counter += 1
                     self.reconstruct_edges()
                     # print(self.edges)
-        self.plot_figure()
+
 
     def pixel2meter(self, locs):
         x = locs[:, 1] - self.cols / 2.
@@ -188,6 +191,8 @@ class ObjectMapper:
         for robot_ns_neighbor, robot_graph_neighbor in self.graphs_neighbor.items():
             self.compare_graphs((self.objects, self.edges), robot_graph_neighbor)
 
+        self.plot_figure()
+
     def compare_graphs(self, graph_self: tuple, graph_neighbor: tuple):
         nodes_self, edges_self = graph_self
         nodes_neighbor, edges_neighbor = graph_neighbor
@@ -207,35 +212,25 @@ class ObjectMapper:
         A_star = get_principal_eigen_vector(S)
         A_star_matrix = A_star.reshape(N, M)
         node_matching = self.linear_assignment(A_star_matrix, N, M)
+        for node_idx_self, node_idx_neighbor in node_matching.items():
+            node_id_neighbor = nodes_neighbor_id_sorted[node_idx_neighbor]
+            graph_neighbor[0][node_id_neighbor].associated_object_id = nodes_self_id_sorted[node_idx_self]
 
-    # solve min_A\sum_{j=1}^N\sum_{k=1}^M trace(-A^TL)
-    # with A(j,k)\in {0,1}
-    # \sum^N_{j=1}A(j,k)<=1
-    # \sum^M_{k=1} A(j,k) <=1
     def linear_assignment(self, L: np.ndarray, N: int, M: int):
-        A = cp.Variable((N, M), boolean=True)
-
-        # Objective function: sum of traces of A^T L
-        objective = cp.Minimize(-cp.sum(cp.trace(A.T @ L)))
-
-        # Constraints:
-        # Each column sum should be <= 1
-        column_constraints = [cp.sum(A[:, k]) <= 1 for k in range(M)]
-
-        # Each row sum should be <= 1
-        row_constraints = [cp.sum(A[j, :]) <= 1 for j in range(N)]
-
-        # Combine constraints
-        constraints = column_constraints + row_constraints
-
-        # Define and solve the problem
-        prob = cp.Problem(objective, constraints)
-        prob.solve()
-
-        a = A.value
-        A_star = np.array(A.value)
-        non_zero_indices = np.nonzero(A_star)
-
+        # solve max_A\sum_{j=1}^N\sum_{k=1}^M trace(-A^TL)
+        # with A(j,k)\in {0,1}
+        # \sum^N_{j=1}A(j,k)<=1
+        # \sum^M_{k=1} A(j,k) <=1
+        # return the corresponding assignment for each index in the matrix
+        node_indices_neighbor, node_indices_self = linear_sum_assignment(-L)
+        assignment_result = {}
+        for i, node_idx_self in enumerate(node_indices_self):
+            node_idx_neighbor = node_indices_neighbor[i]
+            if L[node_idx_neighbor, node_idx_self] >= self.min_eigenvector_accept:
+                assignment_result[node_idx_self] = node_idx_neighbor
+        print("node_indices_neighbor", node_indices_neighbor)
+        print("node_indices_self", node_indices_self)
+        return assignment_result
 
     def construct_edge_similarity_matrix(self, graph_self: tuple, graph_neighbor: tuple):
         nodes_self, edges_self = graph_self
@@ -270,26 +265,42 @@ class ObjectMapper:
 
     def plot_figure(self):
 
-        plt.figure(figsize=(8, 8), dpi=100)
-        plt.scatter(self.points[:, 0], self.points[:, 1], s=1, c='k')
-        plt.plot(self.poses[:, 0], self.poses[:, 1], 'go')
+        plt.figure(figsize=(8, 8), dpi=150)
+        # plt.scatter(self.points[:, 0], self.points[:, 1], s=1, c='k')
+        plt.plot(self.poses[:, 0], self.poses[:, 1], 'ro')
         # cloud = keyframe.fusedCloud
         #
         # plt.scatter(cloud[:, 0], cloud[:, 1], s=1, c='g')
 
-        for obj in self.objects.values():
-            plt.plot(obj.points_transformed[:, 0], obj.points_transformed[:, 1], 'lightblue')
+        for k, (neighbor_objects, _) in self.graphs_neighbor.items():
+            if k == 1:
+                self.plot_objects(neighbor_objects, color_pt='lightblue', color_obj='blue')
+            if k == 2:
+                self.plot_objects(neighbor_objects, color_pt='lightpink', color_obj='red')
+            if k == 3:
+                self.plot_objects(neighbor_objects, color_pt='lightcoral', color_obj='orange')
+
+        self.plot_objects(self.objects, color_pt='lightgreen', color_obj='green')
+
+        plt.xlim([-80, 80])
+        plt.ylim([-80, 80])
+        # plt.axis('equal')
+        plt.savefig('test_data/' + str(self.robot_ns) + '/' + str(self.poses.shape[0]) + '.png')
+        plt.close()
+
+    def plot_objects(self, objects, color_pt='lightblue', color_obj='r'):
+        for obj in objects.values():
+            # plt.plot(obj.points_transformed[:, 0], obj.points_transformed[:, 1], color_pt)
             if obj.object_type == 0:
-                color = 'r'
+                color = color_obj
             elif obj.object_type == 1:
-                color = 'b'
+                color = color_obj
             else:
                 color = 'g'
             plt.plot(obj.bounding_box_transformed[:, 0],
                      obj.bounding_box_transformed[:, 1],
-                     color)
-
-        plt.xlim([-80, 80])
-        plt.ylim([-80, 80])
-        plt.savefig('test_data/' + str(self.robot_ns) + '/' + str(self.poses.shape[0]) + '.png')
-        plt.close()
+                     color, alpha=.5)
+            if obj.associated_object_id != -1:
+                plt.plot([obj.center[0], self.objects[obj.associated_object_id].center[0]],
+                         [obj.center[1], self.objects[obj.associated_object_id].center[1]],
+                         'black', alpha=.5)

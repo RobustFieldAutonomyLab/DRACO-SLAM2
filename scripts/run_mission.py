@@ -4,7 +4,7 @@ from slam.comm_link import CommLink
 from slam.registration import Registration
 from slam.robot import Robot
 import slam.utils as utils
-
+import copy
 
 def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
     with open(input_yaml, 'r') as file:
@@ -53,12 +53,12 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
             # at each stamp, everybody update the graph with each other if there is anything new in the graph
             for robot_id_source in robots.keys():
                 for robot_id_target in robots.keys():
-                    if robot_id_target != robot_id_source: # for debug: only compare with self TODO: delete
+                    if robot_id_target == robot_id_source:
                         continue
                     # exchange the graph with neighbor
                     robots[robot_id_source].object_detection.graphs_neighbor[robot_id_target]\
-                        = (robots[robot_id_target].object_detection.objects,
-                           robots[robot_id_target].object_detection.edges)
+                        = (copy.deepcopy(robots[robot_id_target].object_detection.objects),
+                           copy.deepcopy(robots[robot_id_target].object_detection.edges))
 
                 robots[robot_id_source].object_detection.compare_all_neighbor_graph()
 
