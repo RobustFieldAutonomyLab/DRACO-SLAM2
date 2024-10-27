@@ -1,11 +1,28 @@
 node:
   min_distance_accept: 2.0
-  min_number: 4
+  min_number: 5
+  dbscan_eps: 1.2
+  dbscan_min_sample: 20
+#    dbscan_eps: 3.0
+#    dbscan_min_sample: 20
 edge:
-  max_distance: 1000.0
-  min_number: 4
+  max_distance: 100000000000.0
+  min_number: 10
 
 matching:
-  use_type: True
+  use_type: False
+  use_shape: True
   mu: 8.0
   min_eigenvector_accept: 0.1
+  min_number: 5
+  min_inliers: 5
+  mu_shape: .5
+
+#  matching:
+#    use_type: False
+#    use_shape: True
+#    mu: 8.0
+#    min_eigenvector_accept: 0.05
+#    min_number: 8
+#    min_inliers: 8
+#    mu_shape: .1

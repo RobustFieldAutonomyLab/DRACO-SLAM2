@@ -6,6 +6,7 @@ from slam.robot import Robot
 import slam.utils as utils
 import copy
 
+
 def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
     with open(input_yaml, 'r') as file:
         config = yaml.safe_load(file)
@@ -56,7 +57,7 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
                     if robot_id_target == robot_id_source:
                         continue
                     # exchange the graph with neighbor
-                    robots[robot_id_source].object_detection.graphs_neighbor[robot_id_target]\
+                    robots[robot_id_source].object_detection.graphs_neighbor[robot_id_target] \
                         = (copy.deepcopy(robots[robot_id_target].object_detection.objects),
                            copy.deepcopy(robots[robot_id_target].object_detection.edges))
 

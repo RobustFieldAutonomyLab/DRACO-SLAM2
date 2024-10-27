@@ -15,14 +15,18 @@ from slam.feature_extraction import FeatureExtraction
 class Keyframe():
     # class to be used as a sub class for 3D mapping
 
-    def __init__(self, pose_, image_, fusedCloud_):
+    def __init__(self, ID_, pose_, image_, fusedCloud_):
         self.pose = pose_
         self.image = image_
         self.segInfo = None
         self.segCloud = None
-        self.ID = None
-        self.width = float(image_.shape[1])
-        self.height = float(image_.shape[0])
+        self.ID = ID_
+        if image_ is not None:
+            self.width = float(image_.shape[1])
+            self.height = float(image_.shape[0])
+        else:
+            self.width = 100
+            self.height = 100
         self.maxRange = 30.
         self.FOV = 130.
         self.xRange = self.maxRange * np.cos(np.radians(90. - self.FOV / 2))

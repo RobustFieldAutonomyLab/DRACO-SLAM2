@@ -2,8 +2,13 @@ import numpy as np
 import yaml
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
+from sklearn.cluster import DBSCAN, HDBSCAN
 from slam.object_detection import *
 from scipy.optimize import linear_sum_assignment
+from slam.feature_extraction import FeatureExtraction
+import cv2
+import time
+from scipy.sparse.linalg import eigs
 
 
 # Everything related to the object map
@@ -29,13 +34,18 @@ class Object:
         self.id = -1
         self.points_raw = [points]
         # list[ndarray]: poses where the object is detected
+        self.keys = set()
         self.pose = [pose]
+        self.dimension = (1000, 1000)
         # list[ndarray]: untransformed bounding box of the object
-        self.bounding_box_raw = [np.array([bounding_box[0, :],
-                                           [bounding_box[1, 0], bounding_box[0, 1]],
-                                           bounding_box[1, :],
-                                           [bounding_box[0, 0], bounding_box[1, 1]],
-                                           bounding_box[0, :]])]
+        if len(bounding_box) == 2:
+            self.bounding_box_raw = [np.array([bounding_box[0, :],
+                                               [bounding_box[1, 0], bounding_box[0, 1]],
+                                               bounding_box[1, :],
+                                               [bounding_box[0, 0], bounding_box[1, 1]],
+                                               bounding_box[0, :]])]
+        else:
+            self.bounding_box_raw = [np.concatenate((bounding_box, bounding_box[0:1]), axis=0)]
         # int: object type
         self.object_type = obj_type
         # ndarray: transformed points of the object
@@ -73,6 +83,10 @@ class Object:
         else:
             return False
 
+    def compare_object_shape(self, other: 'Object', mu_shape):
+        return np.exp(-mu_shape * (abs(max(self.dimension) - max(other.dimension))
+                                  + abs(min(self.dimension) - min(other.dimension))))
+
     def update(self, other: 'Object'):
         self.points_raw = self.points_raw + other.points_raw
         self.pose = self.pose + other.pose
@@ -96,48 +110,124 @@ def calculate_center_distance(object0: Object, object1: Object):
 
 def get_principal_eigen_vector(mat):
     # Compute eigenvalues and eigenvectors
-    eigenvalues, eigenvectors = np.linalg.eig(mat)
+    # eigenvalues, eigenvectors = np.linalg.eig(mat)
+    #
+    # # Find the index of the largest eigenvalue
+    # principal_eigenvalue_index = np.argmax(eigenvalues)
+    #
+    # # Get the principal eigenvector
+    # principal_eigenvector = eigenvectors[:, principal_eigenvalue_index]
+    # return np.abs(principal_eigenvector)
 
-    # Find the index of the largest eigenvalue
-    principal_eigenvalue_index = np.argmax(eigenvalues)
+    eigenvalue, eigenvector = eigs(mat, k=1, which='LM')  # 'LM' means Largest Magnitude
+    return np.abs(eigenvector[:, 0])
 
-    # Get the principal eigenvector
-    principal_eigenvector = eigenvectors[:, principal_eigenvalue_index]
-    return np.abs(principal_eigenvector)
+
+def calculate_bounding_box(points):
+    # min_x, min_y = np.min(points, axis=0)
+    # max_x, max_y = np.max(points, axis=0)
+
+    # Compute the minimum area bounding rectangle
+    points = np.array(points, dtype=np.float32)
+    rect = cv2.minAreaRect(points)
+
+    # Get the rectangle's corner points
+    box = cv2.boxPoints(rect)
+
+    return box, rect[1]
 
 
 class ObjectMapper:
     def __init__(self, robot_ns, config):
         self.robot_ns = robot_ns
         self.config = config
-        self.object_detector = ObjectDetection(config)
+        self.feature_extractor = FeatureExtraction(config["feature_extraction"])
 
-        self.cols = self.object_detector.feature_extractor.cols
-        self.rows = self.object_detector.feature_extractor.rows
-        self.width = self.object_detector.feature_extractor.width
-        self.height = self.object_detector.feature_extractor.height
+        self.cols = self.feature_extractor.cols
+        self.rows = self.feature_extractor.rows
+        self.width = self.feature_extractor.width
+        self.height = self.feature_extractor.height
 
         self.objects = {}
         self.edges = []
         self.points = np.empty((0, 2))
+        self.ids = np.empty((0, 1), dtype=int)
         self.poses = np.empty((0, 3))
         self.object_counter = 0
 
         self.graphs_neighbor = {}
+        self.transformations_neighbor = {}
 
         # graph construction and matching parameters
         with open(config["graph_matching"], 'r') as file:
             config_graph = yaml.safe_load(file)
 
+        # parameters for graph matching
+        self.object_detection_method = "DBSCAN"
         self.max_edge_distance = config_graph["edge"]["max_distance"]
+        self.min_num_edge = config_graph["edge"]["min_number"]
+
         self.min_node_distance = config_graph["node"]["min_distance_accept"]
         self.min_num_node = config_graph["node"]["min_number"]
-        self.min_num_edge = config_graph["edge"]["min_number"]
+        self.dbscan_eps = config_graph["node"]["dbscan_eps"]
+        self.dbscan_min_sample = config_graph["node"]["dbscan_min_sample"]
+
         self.match_use_type = config_graph["matching"]["use_type"]
+        self.match_use_shape = config_graph["matching"]["use_shape"]
         self.mu = config_graph["matching"]["mu"]
+        self.mu_shape = config_graph["matching"]["mu_shape"]
         self.min_eigenvector_accept = config_graph["matching"]["min_eigenvector_accept"]
+        self.min_matched_nodes = config_graph["matching"]["min_number"]
+        self.min_inliers = config_graph["matching"]["min_inliers"]
+
+        if self.object_detection_method == "Gaussian":
+            self.object_detector = ObjectDetection(config)
 
     def add_object(self, keyframe: Keyframe):
+        if self.object_detection_method == "Gaussian":
+            self.add_object_Gaussian(keyframe)
+        elif self.object_detection_method == "DBSCAN":
+            self.add_object_dbscan(keyframe)
+
+    def add_object_dbscan(self, keyframe: Keyframe):
+        if keyframe.image is not None:
+            points, sonarImg, visualize_img = self.feature_extractor.extract_features(keyframe.image)
+            points = self.pixel2meter(points)
+        else:
+            points = keyframe.fusedCloud
+        ids = np.full((points.shape[0], 1), keyframe.ID)
+        self.poses = np.concatenate([self.poses, np.array([keyframe.pose])], axis=0)
+        self.points = np.concatenate([self.points, transform_points(points, keyframe.pose)], axis=0)
+        self.ids = np.concatenate([self.ids, ids], axis=0)
+
+        # dbscan = DBSCAN(eps=1.2, min_samples=10)
+        dbscan = DBSCAN(eps=self.dbscan_eps, min_samples=self.dbscan_min_sample)
+        labels = dbscan.fit_predict(self.points)
+
+        unique_labels = set(labels)  # Get unique cluster labels (-1 for noise)
+
+        self.objects = {}
+        for label in unique_labels:
+            if label == -1:
+                continue
+            cluster_points = self.points[labels == label]  # Points belonging to a cluster
+            box, rect = calculate_bounding_box(cluster_points)
+            obj = Object(cluster_points,
+                         np.array([0, 0, 0]),
+                         box,
+                         1)
+            obj.keys = set(self.ids[labels == label].flatten())
+            ratio = max(rect) / (min(rect) + 0.01)
+            obj.dimension = rect
+            if ratio > 4 and max(rect) > 5:
+                obj.object_type = 1
+            else:
+                obj.object_type = 2
+            self.objects[label] = obj
+            self.objects[label].id = label
+        self.reconstruct_edges()
+
+    def add_object_Gaussian(self, keyframe: Keyframe):
         dict_result = self.object_detector.segmentImage(keyframe)
 
         self.poses = np.concatenate([self.poses, np.array([keyframe.pose])], axis=0)
@@ -169,7 +259,6 @@ class ObjectMapper:
                     self.reconstruct_edges()
                     # print(self.edges)
 
-
     def pixel2meter(self, locs):
         x = locs[:, 1] - self.cols / 2.
         x = (-1 * ((x / float(self.cols / 2.)) * (self.width / 2.)))  #+ self.width
@@ -189,17 +278,44 @@ class ObjectMapper:
 
     def compare_all_neighbor_graph(self):
         for robot_ns_neighbor, robot_graph_neighbor in self.graphs_neighbor.items():
-            self.compare_graphs((self.objects, self.edges), robot_graph_neighbor)
-
+            time0 = time.time()
+            # each row: 0,1: x & y from self graph; 2 & 3: x & y from neighbor graph
+            matched, points_pair = self.compare_graphs((self.objects, self.edges), robot_graph_neighbor)
+            if not matched or points_pair.shape[0] < self.min_matched_nodes:
+                continue
+            R, t = self.calculate_relative_transformation(points_pair)
+            self.transformations_neighbor[robot_ns_neighbor] = (R, t)
+            time1 = time.time()
+            print(f"Compare one graph time: {time1 - time0:.3f}")
+        time0 = time.time()
         self.plot_figure()
+        time1 = time.time()
+        print(f"plot_figure time: {time1 - time0:.3f}")
+
+    def calculate_relative_transformation(self, points_pair: np.ndarray):
+        self_pts = np.array(points_pair[:, :2], dtype=np.float32)
+        neighbor_pts = np.array(points_pair[:, 2:], dtype=np.float32)
+        affine_matrix, inliers = cv2.estimateAffinePartial2D(neighbor_pts,
+                                                             self_pts,
+                                                             method=cv2.RANSAC,
+                                                             ransacReprojThreshold=5.0)
+        if len(inliers) < self.min_inliers:
+            return np.eye(2), np.zeros([2])
+
+        R = affine_matrix[:, :2]
+        scale = np.linalg.norm(R[:, 0])  # Get scale factor from the first column
+        if scale != 0:
+            R /= scale  # Normalize to get rid of scale
+        t = affine_matrix[:, 2]
+        return R, t
 
     def compare_graphs(self, graph_self: tuple, graph_neighbor: tuple):
         nodes_self, edges_self = graph_self
         nodes_neighbor, edges_neighbor = graph_neighbor
         if len(nodes_self) < self.min_num_node or len(nodes_neighbor) < self.min_num_node:
-            return
+            return False, None
         if len(edges_self) < self.min_num_edge or len(edges_neighbor) < self.min_num_edge:
-            return
+            return False, None
         nodes_self_id_sorted = sorted(nodes_self.keys())
         nodes_neighbor_id_sorted = sorted(nodes_neighbor.keys())
         N = len(nodes_neighbor)
@@ -207,16 +323,25 @@ class ObjectMapper:
 
         # perform graph matching
         # construct the edge weight assignment matrix
-        S = self.construct_edge_similarity_matrix(graph_self=graph_self, graph_neighbor=graph_neighbor)
+        S = self.construct_edge_similarity_matrix_batch(graph_self=graph_self, graph_neighbor=graph_neighbor)
+        # S = self.construct_edge_similarity_matrix(graph_self=graph_self, graph_neighbor=graph_neighbor)
         # solve NP-hard question using principal eigen vector of edge_similarity_mat S
         A_star = get_principal_eigen_vector(S)
         A_star_matrix = A_star.reshape(N, M)
-        node_matching = self.linear_assignment(A_star_matrix, N, M)
-        for node_idx_self, node_idx_neighbor in node_matching.items():
+        node_matching = self.linear_assignment(A_star_matrix)
+        if len(node_matching) == 0:
+            return False, None
+        points_pair = np.zeros([len(node_matching), 4])
+        for i, (node_idx_self, node_idx_neighbor) in enumerate(node_matching.items()):
             node_id_neighbor = nodes_neighbor_id_sorted[node_idx_neighbor]
             graph_neighbor[0][node_id_neighbor].associated_object_id = nodes_self_id_sorted[node_idx_self]
+            points_pair[i, :2] = nodes_self[nodes_self_id_sorted[node_idx_self]].center
+            points_pair[i, 2:] = nodes_neighbor[node_id_neighbor].center
 
-    def linear_assignment(self, L: np.ndarray, N: int, M: int):
+        # first node from self, then node from neighbor
+        return True, points_pair
+
+    def linear_assignment(self, L: np.ndarray):
         # solve max_A\sum_{j=1}^N\sum_{k=1}^M trace(-A^TL)
         # with A(j,k)\in {0,1}
         # \sum^N_{j=1}A(j,k)<=1
@@ -228,9 +353,83 @@ class ObjectMapper:
             node_idx_neighbor = node_indices_neighbor[i]
             if L[node_idx_neighbor, node_idx_self] >= self.min_eigenvector_accept:
                 assignment_result[node_idx_self] = node_idx_neighbor
-        print("node_indices_neighbor", node_indices_neighbor)
-        print("node_indices_self", node_indices_self)
+        # print("node_indices_neighbor", node_indices_neighbor)
+        # print("node_indices_self", node_indices_self)
         return assignment_result
+
+    def construct_edge_similarity_matrix_batch(self, graph_self: tuple, graph_neighbor: tuple):
+        time0 = time.time()
+        nodes_self, edges_self = graph_self
+        nodes_neighbor, edges_neighbor = graph_neighbor
+
+        nodes_self_id_sorted = np.array(sorted(nodes_self.keys()))
+        nodes_neighbor_id_sorted = np.array(sorted(nodes_neighbor.keys()))
+
+        size_s = len(nodes_self) * len(nodes_neighbor)
+
+        # edge utility
+        # row: number of edges self, col: number of edges neighbor
+        e_self_mat = np.full((len(nodes_self), len(nodes_self)), np.nan)
+        e_neighbor_mat = np.full((len(nodes_neighbor), len(nodes_neighbor)), np.nan)
+
+        # Create index arrays using searchsorted for better performance
+        j0_list, j1_list, ej01_list = zip(*edges_self)  # size m*m
+        j0_indices = np.searchsorted(nodes_self_id_sorted, j0_list)
+        j1_indices = np.searchsorted(nodes_self_id_sorted, j1_list)
+
+        # Assign the corresponding ej01 values to the e_self_mat matrix using advanced indexing
+        e_self_mat[j0_indices, j1_indices] = ej01_list
+        e_self_mat[j1_indices, j0_indices] = ej01_list
+
+        # Process edges_neighbor similarly
+        j0_list, j1_list, ej01_list = zip(*edges_neighbor)  # size n*n
+        j0_indices = np.searchsorted(nodes_neighbor_id_sorted, j0_list)
+        j1_indices = np.searchsorted(nodes_neighbor_id_sorted, j1_list)
+
+        e_neighbor_mat[j0_indices, j1_indices] = ej01_list
+        e_neighbor_mat[j1_indices, j0_indices] = ej01_list
+
+        # Calculate e_s_mat
+        e_s_mat = -self.mu * np.abs(e_self_mat[np.newaxis, :, np.newaxis, :] -
+                                    e_neighbor_mat[:, np.newaxis, :, np.newaxis])
+
+        # Replace NaNs with 0 and apply exp only on non-zero values
+        e_s_mat = np.nan_to_num(e_s_mat, nan=0)
+        e_s_mat[e_s_mat != 0] = np.exp(e_s_mat[e_s_mat != 0])
+        e_s_mat = np.reshape(e_s_mat, (size_s, size_s))
+
+        # node utility
+        if self.match_use_type:
+            d_self_mat = np.full((1, len(nodes_self)), np.nan)
+            d_neighbor_mat = np.full((len(nodes_neighbor), 1), np.nan)
+            for i, node_id in enumerate(nodes_self_id_sorted):
+                d_self_mat[0, i] = nodes_self[node_id].object_type
+            for i, node_id in enumerate(nodes_neighbor_id_sorted):
+                d_neighbor_mat[i, 0] = nodes_neighbor[node_id].object_type
+            d_t_mat = d_self_mat == d_neighbor_mat
+            d_t_mat = np.array([d_t_mat.flatten()])
+            d_t_mat = d_t_mat * d_t_mat.T
+            e_s_mat = e_s_mat * d_t_mat
+        if self.match_use_shape:
+            d_self_mat = np.full((2, 1, len(nodes_self)), np.nan)
+            d_neighbor_mat = np.full((2, len(nodes_neighbor), 1), np.nan)
+
+            for i, node_id in enumerate(nodes_self_id_sorted):
+                d_self_mat[0, 0, i] = max(nodes_self[node_id].dimension)
+                d_self_mat[1, 0, i] = min(nodes_self[node_id].dimension)
+            for i, node_id in enumerate(nodes_neighbor_id_sorted):
+                d_neighbor_mat[0, i, 0] = max(nodes_neighbor[node_id].dimension)
+                d_neighbor_mat[1, i, 0] = min(nodes_neighbor[node_id].dimension)
+            d_t_mat = np.exp(-self.mu_shape * np.abs(d_self_mat - d_neighbor_mat))
+            d_t_mat = d_t_mat[0, :, :] * d_t_mat[1, :, :]
+            d_t_mat = np.array([d_t_mat.flatten()])
+            d_t_mat = d_t_mat * d_t_mat.T
+            e_s_mat = e_s_mat * d_t_mat
+
+        time1 = time.time()
+        print("time calculate batch: ", time1 - time0)
+
+        return e_s_mat
 
     def construct_edge_similarity_matrix(self, graph_self: tuple, graph_neighbor: tuple):
         nodes_self, edges_self = graph_self
@@ -238,6 +437,8 @@ class ObjectMapper:
         nodes_self_id_sorted = sorted(nodes_self.keys())
         nodes_neighbor_id_sorted = sorted(nodes_neighbor.keys())
         size_s = len(nodes_self) * len(nodes_neighbor)
+        node_self_index = {node_id: idx for idx, node_id in enumerate(nodes_self_id_sorted)}
+        node_neighbor_index = {node_id: idx for idx, node_id in enumerate(nodes_neighbor_id_sorted)}
 
         # row: number of edges self, col: number of edges neighbor
         e_s_mat = np.zeros([size_s, size_s])
@@ -245,42 +446,61 @@ class ObjectMapper:
             for k0, k1, ek01 in edges_self:
                 # if not using object type for edge matching
                 d_e_jk = np.exp(-self.mu * abs(ej01 - ek01))
-                case_1 = (nodes_neighbor[j0].compare_object_type(nodes_self[k0])
-                          and nodes_neighbor[j1].compare_object_type(nodes_self[k1]))
-                case_2 = (nodes_neighbor[j1].compare_object_type(nodes_self[k0])
-                          and nodes_neighbor[j0].compare_object_type(nodes_self[k1]))
-                if not self.match_use_type or case_1:
+                # d_e_jk = ej01 - ek01
+
+                case_1 = True
+                case_2 = True
+                if self.match_use_type:
+                    case_1 = (nodes_neighbor[j0].compare_object_type(nodes_self[k0])
+                              and nodes_neighbor[j1].compare_object_type(nodes_self[k1]))
+                    case_2 = (nodes_neighbor[j1].compare_object_type(nodes_self[k0])
+                              and nodes_neighbor[j0].compare_object_type(nodes_self[k1]))
+                if self.match_use_shape:
+                    d_e_jk1 = (d_e_jk * nodes_neighbor[j0].compare_object_shape(nodes_self[k0], self.mu_shape)
+                               * nodes_neighbor[j1].compare_object_shape(nodes_self[k1], self.mu_shape))
+                    d_e_jk2 = (d_e_jk * nodes_neighbor[j1].compare_object_shape(nodes_self[k0], self.mu_shape)
+                               * nodes_neighbor[j0].compare_object_shape(nodes_self[k1], self.mu_shape))
+                else:
+                    d_e_jk1 = d_e_jk
+                    d_e_jk2 = d_e_jk
+
+                if case_1:
                     # case 1
-                    s0 = nodes_neighbor_id_sorted.index(j0) * len(nodes_self) + nodes_self_id_sorted.index(k0)
-                    s1 = nodes_neighbor_id_sorted.index(j1) * len(nodes_self) + nodes_self_id_sorted.index(k1)
-                    e_s_mat[s0, s1] = d_e_jk
-                    e_s_mat[s1, s0] = d_e_jk
-                if not self.match_use_type or case_2:
+                    s0 = node_neighbor_index[j0] * len(nodes_self) + node_self_index[k0]
+                    s1 = node_neighbor_index[j1] * len(nodes_self) + node_self_index[k1]
+                    e_s_mat[s0, s1] = d_e_jk1
+                    e_s_mat[s1, s0] = d_e_jk1
+                if case_2:
                     # case 2
-                    s0 = nodes_neighbor_id_sorted.index(j0) * len(nodes_self) + nodes_self_id_sorted.index(k1)
-                    s1 = nodes_neighbor_id_sorted.index(j1) * len(nodes_self) + nodes_self_id_sorted.index(k0)
-                    e_s_mat[s0, s1] = d_e_jk
-                    e_s_mat[s1, s0] = d_e_jk
+                    s0 = node_neighbor_index[j0] * len(nodes_self) + node_self_index[k1]
+                    s1 = node_neighbor_index[j1] * len(nodes_self) + node_self_index[k0]
+                    e_s_mat[s0, s1] = d_e_jk2
+                    e_s_mat[s1, s0] = d_e_jk2
         return e_s_mat
 
     def plot_figure(self):
 
         plt.figure(figsize=(8, 8), dpi=150)
-        # plt.scatter(self.points[:, 0], self.points[:, 1], s=1, c='k')
-        plt.plot(self.poses[:, 0], self.poses[:, 1], 'ro')
+        plt.scatter(self.points[:, 0], self.points[:, 1], s=1, c='k')
+        plt.plot(self.poses[:, 0], self.poses[:, 1], 'co')
         # cloud = keyframe.fusedCloud
         #
         # plt.scatter(cloud[:, 0], cloud[:, 1], s=1, c='g')
 
         for k, (neighbor_objects, _) in self.graphs_neighbor.items():
+            if k not in self.transformations_neighbor:
+                R = np.eye(2)
+                t = np.zeros([2])
+            else:
+                (R, t) = self.transformations_neighbor[k]
             if k == 1:
-                self.plot_objects(neighbor_objects, color_pt='lightblue', color_obj='blue')
+                self.plot_objects(neighbor_objects, R, t, color_pt='lightblue', color_obj='blue')
             if k == 2:
-                self.plot_objects(neighbor_objects, color_pt='lightpink', color_obj='red')
+                self.plot_objects(neighbor_objects, R, t, color_pt='lightpink', color_obj='red')
             if k == 3:
-                self.plot_objects(neighbor_objects, color_pt='lightcoral', color_obj='orange')
+                self.plot_objects(neighbor_objects, R, t, color_pt='lightcoral', color_obj='orange')
 
-        self.plot_objects(self.objects, color_pt='lightgreen', color_obj='green')
+        self.plot_objects(self.objects, np.eye(2), np.zeros([2]), color_pt='lightgreen', color_obj='green')
 
         plt.xlim([-80, 80])
         plt.ylim([-80, 80])
@@ -288,19 +508,23 @@ class ObjectMapper:
         plt.savefig('test_data/' + str(self.robot_ns) + '/' + str(self.poses.shape[0]) + '.png')
         plt.close()
 
-    def plot_objects(self, objects, color_pt='lightblue', color_obj='r'):
+    def plot_objects(self, objects, R, t, color_pt='lightblue', color_obj='r'):
+        if t.sum() != 0:
+            print("transformation: ", R, t)
         for obj in objects.values():
             # plt.plot(obj.points_transformed[:, 0], obj.points_transformed[:, 1], color_pt)
             if obj.object_type == 0:
-                color = color_obj
+                color = 'green'
             elif obj.object_type == 1:
-                color = color_obj
+                color = 'blue'
             else:
-                color = 'g'
-            plt.plot(obj.bounding_box_transformed[:, 0],
-                     obj.bounding_box_transformed[:, 1],
-                     color, alpha=.5)
+                color = 'orange'
+            bounding_box = np.dot(R, obj.bounding_box_transformed.T).T + t
+            center = np.dot(R, obj.center.T).T + t
+            plt.plot(bounding_box[:, 0],
+                     bounding_box[:, 1],
+                     color_obj, alpha=1)
             if obj.associated_object_id != -1:
-                plt.plot([obj.center[0], self.objects[obj.associated_object_id].center[0]],
-                         [obj.center[1], self.objects[obj.associated_object_id].center[1]],
-                         'black', alpha=.5)
+                plt.plot([center[0], self.objects[obj.associated_object_id].center[0]],
+                         [center[1], self.objects[obj.associated_object_id].center[1]],
+                         color_obj, alpha=1)

@@ -2,9 +2,9 @@
 
 # different per dataset
 dataset:
-  sim: True              # if you are using simulated data or not
+  sim: False              # if you are using simulated data or not
                          # if True, the data loader grabs ground truth information
-  mission: "usmma"       # "plane" "usmma" "usmma_real"
+  mission: "plane"       # "plane" "usmma" "usmma_real"
   study_samples: 1       # number of re-run
   total_slam_steps: 103  # number of steps in the slam mission
                          # plane 80, usmma_sim 60, summa real 103
