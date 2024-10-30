@@ -4,7 +4,7 @@
 dataset:
   sim: False              # if you are using simulated data or not
                          # if True, the data loader grabs ground truth information
-  mission: "plane"       # "plane" "usmma" "usmma_real"
+  mission: "usmma_real"       # "plane" "usmma" "usmma_real"
   study_samples: 1       # number of re-run
   total_slam_steps: 103  # number of steps in the slam mission
                          # plane 80, usmma_sim 60, summa real 103
@@ -12,11 +12,21 @@ dataset:
   mode: 0                # DRACO (0) or ALCS (1)
   min_uncertainty: 0.015 # minimum uncertainty for ALCS
 
+  update_poses: True     # if you want to update the poses from neighbors
+
   object_detection:
     object_icp: config/object_icp.yaml
     model: models/real_data_model.h5
     feature_extraction: config/feature.yaml
     graph_matching: config/graph.yaml
+
+  loop_closure:
+    use_ringkey: False     # If you want to use ringkey for loop closure, not yet implemented
+    max_dist: 6.0          # maximum distance to accept a potential loop closure
+    max_angle: 50.0        # maximum angular distance to accept a potential loop closure
+    min_overlap: 0.5       # minimum overlap to accept a loop closure
+    cov_scale: 20.0        # scale for expand the loop closure fitness score to loop closure covariance
+    icp: config/icp.yaml   # ICP parameters
 
 global_icp: # parameter for global ICP, see SHGO docs
   sampling_points: 500

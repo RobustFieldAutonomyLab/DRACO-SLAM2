@@ -7,6 +7,7 @@ from matplotlib.patches import Ellipse, Wedge
 import pickle
 import os
 import time
+import copy
 
 from slam.utils import create_full_cloud, get_all_context, get_points, verify_pcm, X, robot_to_symbol, numpy_to_gtsam, \
     transform_points
@@ -14,6 +15,30 @@ from slam.utils import create_full_cloud, get_all_context, get_points, verify_pc
 from slam.loop_closure import LoopClosure
 from slam.object_detection import Keyframe
 from slam.object_mapper import ObjectMapper
+from slam.loop_closure_manager import LoopClosureManager
+
+
+class RobotMessage:
+    def __init__(self, robot_id, keyframe_id, pose, covariance):
+        self.robot_id = robot_id
+        self.id = keyframe_id
+        self.pose = pose
+        self.covariance = covariance
+
+        # pose transformed into the local robot coordinate frame
+        self.pose_transformed = None
+        # covariance transformed into the local robot coordinate frame
+        self.covariance_transformed = None
+        # keyframe ids matched with the keyframe id of the local robot
+        self.matched_keyframe_id = None
+
+
+class ScanMessage:
+    def __init__(self, robot_id, keyframe_id, points):
+        self.robot_id = robot_id
+        self.id = keyframe_id
+        self.points = points
+
 
 
 class Robot():
@@ -98,6 +123,8 @@ class Robot():
         #                            "model": "models/sim_model.h5",
         #                            "feature_extraction": "config/feature.yaml"}
         self.object_detection = ObjectMapper(robot_id, run_config['object_detection'])
+        self.loop_closure_manager = LoopClosureManager(robot_id, run_config['loop_closure'])
+        self.update_poses = run_config['update_poses']
 
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
         """Create a noise model from a list of sigmas, treated like a diagnal matrix.
@@ -175,6 +202,7 @@ class Robot():
     def step(self, path: str) -> None:
         """Increase the step of SLAM
         """
+        # TODO: make poses update in real-time for the object detection
         if len(self.images) != 0:
             keyframe = Keyframe(self.slam_step,
                                 self.poses[self.slam_step],
@@ -186,6 +214,7 @@ class Robot():
                                 None,
                                 self.points[self.slam_step])
         self.object_detection.add_object(keyframe)
+        self.loop_closure_manager.add_scan(self.points[self.slam_step])
         if self.slam_step == 0:
             self.start_graph()
             self.update_graph()
@@ -984,3 +1013,52 @@ class Robot():
                 i += 1
             plt.plot(temp_2,temp)
         plt.show()'''
+
+    def get_graph(self):
+        return self.object_detection.get_graph()
+
+    def get_keyframes(self, keyframe_id_set):
+        msgs = {}
+        values = self.isam.calculateEstimate()
+        for keyframe_id in keyframe_id_set:
+            pose_array = self.state_estimate[keyframe_id, :]
+            covariance = self.covariance[keyframe_id, :, :]
+            msg = RobotMessage(robot_id=self.robot_id, keyframe_id=keyframe_id, pose=pose_array, covariance=covariance)
+            msgs[keyframe_id] = msg
+        return msgs
+
+    def receive_graph_from_neighbor(self, neighbor_id, graph):
+        self.object_detection.graphs_neighbor[neighbor_id] = graph
+
+    def receive_keyframes_from_neighbor(self, neighbor_id, ids, keyframes):
+        self.loop_closure_manager.add_keyframes_neighbor(neighbor_id, ids, keyframes)
+        try:
+            self.loop_closure_manager.transformations_neighbor[neighbor_id] = (
+                self.object_detection.transformations_neighbor)[neighbor_id]
+        except:
+            print("No transformation found for neighbor in object detection")
+
+        return self.loop_closure_manager.update_keyframe_poses_transformed(neighbor_id, self.state_estimate)
+
+    def perform_graph_match(self):
+        keyframe_id_self, keyframe_id_to_request = self.object_detection.compare_all_neighbor_graph()
+        for robot_id in keyframe_id_to_request.keys():
+            if self.update_poses:
+                if robot_id in self.loop_closure_manager.poses_id_neighbor:
+                    keyframe_id_to_request[robot_id] = (
+                        keyframe_id_to_request[robot_id].union(self.loop_closure_manager.poses_id_neighbor[robot_id]))
+            else:
+                keyframe_id_to_request[robot_id] = (
+                    self.loop_closure_manager.get_ids_pose_not_received(robot_id, keyframe_id_to_request[robot_id]))
+        return keyframe_id_self, keyframe_id_to_request
+
+    def get_scans(self, keyframe_id_set):
+        msgs = {}
+        for keyframe_id in keyframe_id_set:
+            msg = ScanMessage(robot_id=self.robot_id, keyframe_id=keyframe_id, points=self.points[keyframe_id])
+            msgs[keyframe_id] = msg
+        return msgs
+
+    def receive_scans_from_neighbor(self, neighbor_id, ids, keyframes):
+        self.loop_closure_manager.add_scans_neighbor(neighbor_id, ids, keyframes)
+        self.loop_closure_manager.perform_icp(neighbor_id, self.state_estimate)

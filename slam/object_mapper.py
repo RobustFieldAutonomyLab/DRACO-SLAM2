@@ -2,22 +2,38 @@ import numpy as np
 import yaml
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
-from sklearn.cluster import DBSCAN, HDBSCAN
+from sklearn.cluster import DBSCAN
 from slam.object_detection import *
 from scipy.optimize import linear_sum_assignment
 from slam.feature_extraction import FeatureExtraction
 import cv2
 import time
 from scipy.sparse.linalg import eigs
+import copy
 
 
 # Everything related to the object map
 def transform_points(points, pose):
     # transform the points to the global frame
-    R = np.array([[np.cos(pose[2]), -np.sin(pose[2])],
-                  [np.sin(pose[2]), np.cos(pose[2])]])
-    T = pose[:2]
+    if pose.ndim == 1:
+        R = np.array([[np.cos(pose[2]), -np.sin(pose[2])],
+                      [np.sin(pose[2]), np.cos(pose[2])]])
+        T = pose[:2]
+    else:
+        R = pose[:2, :2]
+        T = pose[:2, 2]
     return np.dot(R, points.T).T + T
+
+
+def state_to_matrix(state):
+    return np.array([[np.cos(state[2]), -np.sin(state[2]), state[0]],
+                     [np.sin(state[2]), np.cos(state[2]), state[1]],
+                     [0, 0, 1]])
+
+
+def matrix_to_state(transformation):
+    rad = np.arctan2(transformation[1, 0], transformation[0, 0])
+    return np.array([transformation[0, 2], transformation[1, 2], rad])
 
 
 def transform_point(point, pose):
@@ -85,7 +101,7 @@ class Object:
 
     def compare_object_shape(self, other: 'Object', mu_shape):
         return np.exp(-mu_shape * (abs(max(self.dimension) - max(other.dimension))
-                                  + abs(min(self.dimension) - min(other.dimension))))
+                                   + abs(min(self.dimension) - min(other.dimension))))
 
     def update(self, other: 'Object'):
         self.points_raw = self.points_raw + other.points_raw
@@ -277,45 +293,64 @@ class ObjectMapper:
                     self.edges.append((node0.id, node1.id, dist))
 
     def compare_all_neighbor_graph(self):
+        self_dict = {}
+        request_dict = {}
         for robot_ns_neighbor, robot_graph_neighbor in self.graphs_neighbor.items():
             time0 = time.time()
-            # each row: 0,1: x & y from self graph; 2 & 3: x & y from neighbor graph
-            matched, points_pair = self.compare_graphs((self.objects, self.edges), robot_graph_neighbor)
+            # ids_pair: each row: 0: self object id; 1: neighbor object id
+            # points_pair: each row: 0,1: x & y from self graph; 2 & 3: x & y from neighbor graph
+            # step 1: compare two graphs
+            matched, ids_pair, points_pair = self.compare_graphs(
+                (self.objects, self.edges), robot_graph_neighbor)
             if not matched or points_pair.shape[0] < self.min_matched_nodes:
                 continue
-            R, t = self.calculate_relative_transformation(points_pair)
-            self.transformations_neighbor[robot_ns_neighbor] = (R, t)
+            # step 2: calculate relative transformation
+            transformation_estimation_success, transformation, object_inlier_ids = (
+                self.calculate_relative_transformation(ids_pair, points_pair))
+            if not transformation_estimation_success:
+                continue
+            self.transformations_neighbor[robot_ns_neighbor] = transformation
+            # step 3: generate request keyframe from neighbor robot
+            request_dict[robot_ns_neighbor] = self.get_request_keyframe_id(robot_graph_neighbor[0], ids_pair[:, 1])
+            self_dict[robot_ns_neighbor] = self.get_request_keyframe_id(self.objects, ids_pair[:, 0])
             time1 = time.time()
             print(f"Compare one graph time: {time1 - time0:.3f}")
-        time0 = time.time()
-        self.plot_figure()
-        time1 = time.time()
-        print(f"plot_figure time: {time1 - time0:.3f}")
+        return self_dict, request_dict
 
-    def calculate_relative_transformation(self, points_pair: np.ndarray):
+    def get_request_keyframe_id(self, robot_nodes, object_ids):
+        # request keyframe from neighbor robot
+        keyframe_id_to_request = set()
+        for object_id in object_ids:
+            object_this = robot_nodes[object_id]
+            keyframe_id_to_request = keyframe_id_to_request.union(object_this.keys)
+            # request keyframe from neighbor robot
+            # object.request_keyframe_from_neighbor()
+        return keyframe_id_to_request
+
+    def calculate_relative_transformation(self, ids_pair: np.ndarray, points_pair: np.ndarray):
         self_pts = np.array(points_pair[:, :2], dtype=np.float32)
         neighbor_pts = np.array(points_pair[:, 2:], dtype=np.float32)
         affine_matrix, inliers = cv2.estimateAffinePartial2D(neighbor_pts,
                                                              self_pts,
                                                              method=cv2.RANSAC,
                                                              ransacReprojThreshold=5.0)
-        if len(inliers) < self.min_inliers:
-            return np.eye(2), np.zeros([2])
+        if inliers.sum() < self.min_inliers:
+            return False, np.eye(2), np.zeros([2])
 
         R = affine_matrix[:, :2]
         scale = np.linalg.norm(R[:, 0])  # Get scale factor from the first column
         if scale != 0:
             R /= scale  # Normalize to get rid of scale
         t = affine_matrix[:, 2]
-        return R, t
+        return True, (R, t), ids_pair[inliers.flatten().astype(dtype=bool)]
 
     def compare_graphs(self, graph_self: tuple, graph_neighbor: tuple):
         nodes_self, edges_self = graph_self
         nodes_neighbor, edges_neighbor = graph_neighbor
         if len(nodes_self) < self.min_num_node or len(nodes_neighbor) < self.min_num_node:
-            return False, None
+            return False, None, None
         if len(edges_self) < self.min_num_edge or len(edges_neighbor) < self.min_num_edge:
-            return False, None
+            return False, None, None
         nodes_self_id_sorted = sorted(nodes_self.keys())
         nodes_neighbor_id_sorted = sorted(nodes_neighbor.keys())
         N = len(nodes_neighbor)
@@ -330,16 +365,18 @@ class ObjectMapper:
         A_star_matrix = A_star.reshape(N, M)
         node_matching = self.linear_assignment(A_star_matrix)
         if len(node_matching) == 0:
-            return False, None
+            return False, None, None
+        ids_pair = np.zeros([len(node_matching), 2], dtype=int)
         points_pair = np.zeros([len(node_matching), 4])
         for i, (node_idx_self, node_idx_neighbor) in enumerate(node_matching.items()):
             node_id_neighbor = nodes_neighbor_id_sorted[node_idx_neighbor]
             graph_neighbor[0][node_id_neighbor].associated_object_id = nodes_self_id_sorted[node_idx_self]
+            ids_pair[i, :] = [nodes_self_id_sorted[node_idx_self], node_id_neighbor]
             points_pair[i, :2] = nodes_self[nodes_self_id_sorted[node_idx_self]].center
             points_pair[i, 2:] = nodes_neighbor[node_id_neighbor].center
 
         # first node from self, then node from neighbor
-        return True, points_pair
+        return True, ids_pair, points_pair
 
     def linear_assignment(self, L: np.ndarray):
         # solve max_A\sum_{j=1}^N\sum_{k=1}^M trace(-A^TL)
@@ -358,6 +395,7 @@ class ObjectMapper:
         return assignment_result
 
     def construct_edge_similarity_matrix_batch(self, graph_self: tuple, graph_neighbor: tuple):
+        # Accelerate the process by using numpy array operations
         time0 = time.time()
         nodes_self, edges_self = graph_self
         nodes_neighbor, edges_neighbor = graph_neighbor
@@ -398,7 +436,7 @@ class ObjectMapper:
         e_s_mat[e_s_mat != 0] = np.exp(e_s_mat[e_s_mat != 0])
         e_s_mat = np.reshape(e_s_mat, (size_s, size_s))
 
-        # node utility
+        # Node utility
         if self.match_use_type:
             d_self_mat = np.full((1, len(nodes_self)), np.nan)
             d_neighbor_mat = np.full((len(nodes_neighbor), 1), np.nan)
@@ -477,6 +515,9 @@ class ObjectMapper:
                     e_s_mat[s0, s1] = d_e_jk2
                     e_s_mat[s1, s0] = d_e_jk2
         return e_s_mat
+
+    def get_graph(self):
+        return (copy.deepcopy(self.objects), copy.deepcopy(self.edges))
 
     def plot_figure(self):
 

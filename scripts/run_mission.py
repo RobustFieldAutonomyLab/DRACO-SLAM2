@@ -5,6 +5,8 @@ from slam.registration import Registration
 from slam.robot import Robot
 import slam.utils as utils
 import copy
+import time
+import sys
 
 
 def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
@@ -57,11 +59,32 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
                     if robot_id_target == robot_id_source:
                         continue
                     # exchange the graph with neighbor
-                    robots[robot_id_source].object_detection.graphs_neighbor[robot_id_target] \
-                        = (copy.deepcopy(robots[robot_id_target].object_detection.objects),
-                           copy.deepcopy(robots[robot_id_target].object_detection.edges))
+                    robots[robot_id_source].receive_graph_from_neighbor(robot_id_target,
+                                                                        robots[robot_id_target].get_graph())
+                keyframe_id_self, keyframe_id_to_request = robots[robot_id_source].perform_graph_match()
+                # if potential candidates are find, request the keyframes
+                if keyframe_id_to_request:
+                    for robot_id_target in keyframe_id_to_request.keys():
+                        if robot_id_target == robot_id_source:
+                            sys.stderr.write("Should not request from robot self!")
+                        # asking latest keyframe poses from neighbor
+                        pose_msgs = robots[robot_id_target].get_keyframes(keyframe_id_to_request[robot_id_target])
+                        # receive & process keyframe poses from neighbor
+                        scan_request_msg = (robots[robot_id_source].
+                                            receive_keyframes_from_neighbor(robot_id_target,
+                                                                            keyframe_id_to_request[robot_id_target],
+                                                                            pose_msgs))
+                        # asking scan from neighbor
+                        scan_msgs = robots[robot_id_target].get_scans(scan_request_msg)
+                        # receive & process scan from neighbor
+                        robots[robot_id_source].receive_scans_from_neighbor(robot_id_target,
+                                                                            scan_request_msg,
+                                                                            scan_msgs)
 
-                robots[robot_id_source].object_detection.compare_all_neighbor_graph()
+                # time0 = time.time()
+                # robots[robot_id_source].object_detection.plot_figure()
+                # time1 = time.time()
+                # print(f"plot_figure time: {time1 - time0:.3f}")
 
         # search for loop closures
         search = False
