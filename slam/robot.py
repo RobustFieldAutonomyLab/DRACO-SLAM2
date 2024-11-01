@@ -15,29 +15,7 @@ from slam.utils import create_full_cloud, get_all_context, get_points, verify_pc
 from slam.loop_closure import LoopClosure
 from slam.object_detection import Keyframe
 from slam.object_mapper import ObjectMapper
-from slam.loop_closure_manager import LoopClosureManager
-
-
-class RobotMessage:
-    def __init__(self, robot_id, keyframe_id, pose, covariance):
-        self.robot_id = robot_id
-        self.id = keyframe_id
-        self.pose = pose
-        self.covariance = covariance
-
-        # pose transformed into the local robot coordinate frame
-        self.pose_transformed = None
-        # covariance transformed into the local robot coordinate frame
-        self.covariance_transformed = None
-        # keyframe ids matched with the keyframe id of the local robot
-        self.matched_keyframe_id = None
-
-
-class ScanMessage:
-    def __init__(self, robot_id, keyframe_id, points):
-        self.robot_id = robot_id
-        self.id = keyframe_id
-        self.points = points
+from slam.loop_closure_manager import LoopClosureManager, RobotMessage, ScanMessage
 
 
 
@@ -124,6 +102,8 @@ class Robot():
         #                            "feature_extraction": "config/feature.yaml"}
         self.object_detection = ObjectMapper(robot_id, run_config['object_detection'])
         self.loop_closure_manager = LoopClosureManager(robot_id, run_config['loop_closure'])
+        if len(self.truth) != 0:
+            self.loop_closure_manager.ground_truth_self = self.truth
         self.update_poses = run_config['update_poses']
 
     def create_noise_model(self, *sigmas: list) -> gtsam.noiseModel.Diagonal:
@@ -203,6 +183,20 @@ class Robot():
         """Increase the step of SLAM
         """
         # TODO: make poses update in real-time for the object detection
+        if self.slam_step == 0:
+            self.update_scene_graph()
+            self.start_graph()
+            self.update_graph()
+        if self.slam_step + 1 >= self.total_steps:
+            self.is_shutdown = True
+        if not self.is_shutdown:
+            self.slam_step += 1
+            self.add_factors()
+            self.update_scene_graph()
+        self.update_graph()
+        # self.animate_step(path)
+
+    def update_scene_graph(self):
         if len(self.images) != 0:
             keyframe = Keyframe(self.slam_step,
                                 self.poses[self.slam_step],
@@ -215,16 +209,6 @@ class Robot():
                                 self.points[self.slam_step])
         self.object_detection.add_object(keyframe)
         self.loop_closure_manager.add_scan(self.points[self.slam_step])
-        if self.slam_step == 0:
-            self.start_graph()
-            self.update_graph()
-        if self.slam_step + 1 >= self.total_steps:
-            self.is_shutdown = True
-        if not self.is_shutdown:
-            self.slam_step += 1
-            self.add_factors()
-        self.update_graph()
-        # self.animate_step(path)
 
     def start_graph(self) -> None:
         """Start the SLAM graph by inserting the prior.
@@ -1023,7 +1007,16 @@ class Robot():
         for keyframe_id in keyframe_id_set:
             pose_array = self.state_estimate[keyframe_id, :]
             covariance = self.covariance[keyframe_id, :, :]
-            msg = RobotMessage(robot_id=self.robot_id, keyframe_id=keyframe_id, pose=pose_array, covariance=covariance)
+            if len(self.truth) != 0:
+
+                pose_array_truth = self.truth[keyframe_id]
+            else:
+                pose_array_truth = None
+            msg = RobotMessage(robot_id=self.robot_id,
+                               keyframe_id=keyframe_id,
+                               pose=pose_array,
+                               covariance=covariance,
+                               pose_truth=pose_array_truth)
             msgs[keyframe_id] = msg
         return msgs
 

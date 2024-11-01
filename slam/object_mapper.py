@@ -15,7 +15,10 @@ import copy
 # Everything related to the object map
 def transform_points(points, pose):
     # transform the points to the global frame
-    if pose.ndim == 1:
+    if isinstance(pose, tuple):
+        R = pose[0]
+        T = pose[1]
+    elif pose.ndim == 1:
         R = np.array([[np.cos(pose[2]), -np.sin(pose[2])],
                       [np.sin(pose[2]), np.cos(pose[2])]])
         T = pose[:2]
@@ -188,6 +191,7 @@ class ObjectMapper:
         self.dbscan_eps = config_graph["node"]["dbscan_eps"]
         self.dbscan_min_sample = config_graph["node"]["dbscan_min_sample"]
 
+        self.re_match = config_graph["matching"]["re_match"]
         self.match_use_type = config_graph["matching"]["use_type"]
         self.match_use_shape = config_graph["matching"]["use_shape"]
         self.mu = config_graph["matching"]["mu"]
@@ -195,6 +199,7 @@ class ObjectMapper:
         self.min_eigenvector_accept = config_graph["matching"]["min_eigenvector_accept"]
         self.min_matched_nodes = config_graph["matching"]["min_number"]
         self.min_inliers = config_graph["matching"]["min_inliers"]
+        self.object_rej_threshold = config_graph["matching"]["object_rej_threshold"]
 
         if self.object_detection_method == "Gaussian":
             self.object_detector = ObjectDetection(config)
@@ -309,13 +314,48 @@ class ObjectMapper:
                 self.calculate_relative_transformation(ids_pair, points_pair))
             if not transformation_estimation_success:
                 continue
+            print(f"Transformation estimated: {transformation}")
+            print(f"Matched objects: {object_inlier_ids}")
             self.transformations_neighbor[robot_ns_neighbor] = transformation
+            # step 2.5: re-match nodes based on the transformation estimation
+            if self.re_match:
+                object_inlier_ids = self.re_match_nodes(self.objects, robot_graph_neighbor[0], transformation)
+                print(f"Matched objects after re-match: {object_inlier_ids}")
             # step 3: generate request keyframe from neighbor robot
-            request_dict[robot_ns_neighbor] = self.get_request_keyframe_id(robot_graph_neighbor[0], ids_pair[:, 1])
+            request_dict[robot_ns_neighbor] = self.get_request_keyframe_id(robot_graph_neighbor[0],
+                                                                           object_inlier_ids[:, 1])
             self_dict[robot_ns_neighbor] = self.get_request_keyframe_id(self.objects, ids_pair[:, 0])
             time1 = time.time()
             print(f"Compare one graph time: {time1 - time0:.3f}")
         return self_dict, request_dict
+
+    def re_match_nodes(self, nodes_self, nodes_neighbor, transformation):
+        if not self.re_match:
+            return
+        nodes_self_id_sorted = sorted(nodes_self.keys())
+        nodes_neighbor_id_sorted = sorted(nodes_neighbor.keys())
+        N = len(nodes_neighbor)
+        M = len(nodes_self)
+        center_neighbor_mat = np.full((N, 2), np.nan)
+        center_self_mat = np.full((2, M), np.nan)
+        # construct the Assignment matrix
+        for i, node_id in enumerate(nodes_self_id_sorted):
+            center_self_mat[:, i] = nodes_self[node_id].center
+        for i, node_id in enumerate(nodes_neighbor_id_sorted):
+            center_neighbor_mat[i, :] = nodes_neighbor[node_id].center
+        # transform based on the calculated transformation matrix
+        center_neighbor_mat = transform_points(center_neighbor_mat, transformation)
+        # L: size N*M
+        L = np.linalg.norm(center_neighbor_mat[:, np.newaxis, :] - center_self_mat.T[np.newaxis, :, :], axis=2)
+        node_indices_neighbor, node_indices_self = linear_sum_assignment(L)
+        assignment_result = []
+        for i, node_idx_self in enumerate(node_indices_self):
+            node_idx_neighbor = node_indices_neighbor[i]
+            if L[node_idx_neighbor, node_idx_self] < self.object_rej_threshold:
+                assignment_result.append([nodes_self_id_sorted[node_idx_self],
+                                          nodes_neighbor_id_sorted[node_idx_neighbor]])
+
+        return np.array(assignment_result)
 
     def get_request_keyframe_id(self, robot_nodes, object_ids):
         # request keyframe from neighbor robot
@@ -333,7 +373,7 @@ class ObjectMapper:
         affine_matrix, inliers = cv2.estimateAffinePartial2D(neighbor_pts,
                                                              self_pts,
                                                              method=cv2.RANSAC,
-                                                             ransacReprojThreshold=5.0)
+                                                             ransacReprojThreshold=self.object_rej_threshold)
         if inliers.sum() < self.min_inliers:
             return False, np.eye(2), np.zeros([2])
 
@@ -465,7 +505,7 @@ class ObjectMapper:
             e_s_mat = e_s_mat * d_t_mat
 
         time1 = time.time()
-        print("time calculate batch: ", time1 - time0)
+        print(f"Time calculate batch: {time1 - time0}")
 
         return e_s_mat
 
@@ -517,7 +557,7 @@ class ObjectMapper:
         return e_s_mat
 
     def get_graph(self):
-        return (copy.deepcopy(self.objects), copy.deepcopy(self.edges))
+        return copy.deepcopy(self.objects), copy.deepcopy(self.edges)
 
     def plot_figure(self):
 

@@ -2,6 +2,30 @@ import numpy as np
 import yaml
 from bruce_slam import pcl
 from slam.object_mapper import transform_points, state_to_matrix, matrix_to_state
+import matplotlib.pyplot as plt
+
+
+class RobotMessage:
+    def __init__(self, robot_id, keyframe_id, pose, covariance, pose_truth=None):
+        self.robot_id = robot_id
+        self.id = keyframe_id
+        self.pose = pose
+        self.pose_truth = pose_truth
+        self.covariance = covariance
+
+        # pose transformed into the local robot coordinate frame
+        self.pose_transformed = None
+        # covariance transformed into the local robot coordinate frame
+        self.covariance_transformed = None
+        # keyframe ids matched with the keyframe id of the local robot
+        self.matched_keyframe_id = None
+
+
+class ScanMessage:
+    def __init__(self, robot_id, keyframe_id, points):
+        self.robot_id = robot_id
+        self.id = keyframe_id
+        self.points = points
 
 
 class LoopClosureMessage:
@@ -13,8 +37,14 @@ class LoopClosureMessage:
         self.accept = False
         self.fitness_score = -1
         # from source keyframe to target keyframe
-        self.between_pose = np.empty([3, 1])
-        self.cov = np.empty([3, 3])
+        # dT \dot T_source = T_target
+        self.between_pose = None
+
+        # for evaluation purpose
+        self.between_pose_truth = None
+
+        # covariance matrix based on the fitness score
+        self.cov = None
 
     def set_measurement(self, pose, cov, fitness_score):
         self.accept = True
@@ -45,10 +75,17 @@ class LoopClosureManager:
         self.use_ringkey = config['use_ringkey']
         self.min_overlap = config['min_overlap']
         self.cov_scale = config['cov_scale']
+
         self.icp_config = config['icp']
+        self.window_size = config['window_size']
+
+        self.visualize = config['visualize']
 
         # save history scan from robot self for loop closure detection
         self.historical_scans = []
+
+        # ground truth pose for evaluation
+        self.ground_truth_self = None
 
         # poses_neighbor dictionary:
         # key: neighbor robot_id
@@ -89,6 +126,7 @@ class LoopClosureManager:
     def perform_icp(self, robot_id, latest_states_self):
         if robot_id not in self.points_id_neighbor:
             return
+
         for id in self.points_id_neighbor[robot_id]:
             source_keyframe = self.poses_neighbor[robot_id][id]
 
@@ -111,6 +149,13 @@ class LoopClosureManager:
                 target_pose = latest_states_self[target_keyframe_id]
                 # target_cloud = T_icp \cdot T_frame \cdot T_{neighbor_state} \cdot source_cloud
                 target_cloud = transform_points(self.historical_scans[target_keyframe_id], target_pose)
+                # using window strategy to add more points for registration
+                if self.window_size != 0:
+                    for i in range(target_keyframe_id - self.window_size, target_keyframe_id + self.window_size):
+                        if i < 0 or i >= len(self.historical_scans):
+                            continue
+                        target_cloud = np.vstack((target_cloud,
+                                                  transform_points(self.historical_scans[i], latest_states_self[i])))
                 icp_status, icp_transform = self.icp.compute(source_cloud, target_cloud, np.eye(3))
                 if not icp_status:
                     # if fall to register, continue
@@ -118,21 +163,37 @@ class LoopClosureManager:
                 # check the quality of register
                 source_cloud_transformed = transform_points(source_cloud, icp_transform)
                 # get fitness score for the current loop
-                idx, distances = pcl.match(source_cloud_transformed, target_cloud, 1, 0.5)
+                idx, distances = pcl.match(target_cloud, source_cloud_transformed, 1, 0.5)
                 overlap = len(idx[idx != -1]) / len(idx[0])
                 # if not enough overlap, skip this loop candidate
                 if overlap < self.min_overlap:
-                    self.loops.add(loop_this)
+                    # self.loops.add(loop_this)
                     continue
                 # finally, the loop closure is a satisfying one
-                source_pose = icp_transform @ state_to_matrix(source_pose)
-                between_pose = 
+                source_pose_new = icp_transform @ state_to_matrix(source_pose)
+                between_pose = state_to_matrix(target_pose) @ np.linalg.inv(source_pose_new)
                 fitness_score = np.mean(distances[distances < float("inf")])
                 cov = np.eye(3) * fitness_score * 20.0
-                loop_this.set_measurement(pose=icp_transform, cov=cov, fitness_score=fitness_score)
+                loop_this.set_measurement(pose=matrix_to_state(between_pose), cov=cov, fitness_score=fitness_score)
+
+                # evaluate the loop closure
+                source_truth = source_keyframe.pose_truth
+                target_truth = self.ground_truth_self[target_keyframe_id]
+                between_truth = source_truth.between(target_truth)
+                loop_this.between_pose_truth = between_truth
+
+                if self.visualize:
+                    plt.plot(source_cloud[:, 0], source_cloud[:, 1], 'r.')
+                    plt.plot(target_cloud[:, 0], target_cloud[:, 1], 'b.')
+                    source_cloud_transformed2 = transform_points(self.points_neighbor[robot_id][id].points,
+                                                                 source_pose_new)
+                    plt.plot(source_cloud_transformed2[:, 0], source_cloud_transformed2[:, 1], 'g.')
+
+                    plt.savefig(f"animate/loop/loop_"
+                                f"{self.robot_ns}_{target_keyframe_id}_{robot_id}_{id}:{overlap:.2f}.png")
+                    plt.close()
 
                 self.loops.add(loop_this)
-
 
     def add_scan(self, scan):
         self.historical_scans.append(scan)

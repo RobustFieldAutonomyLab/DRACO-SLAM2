@@ -1,28 +1,33 @@
 node:
   min_distance_accept: 2.0
   min_number: 5
-  dbscan_eps: 1.2
+# best performance on the plane dataset
+  dbscan_eps: 1.5
   dbscan_min_sample: 20
-#    dbscan_eps: 3.0
-#    dbscan_min_sample: 20
+
+#  dbscan_eps: 3.0
+#  dbscan_min_sample: 20
 edge:
   max_distance: 100000000000.0
   min_number: 10
+
+# best performance on the plane dataset
+matching:
+  use_type: False
+  use_shape: True
+  re_match: True
+  mu: 8.0
+  min_eigenvector_accept: 0.0
+  min_number: 5
+  min_inliers: 4
+  mu_shape: 2.0
+  object_rej_threshold: 5.0
 
 #matching:
 #  use_type: False
 #  use_shape: True
 #  mu: 8.0
-#  min_eigenvector_accept: 0.1
-#  min_number: 5
-#  min_inliers: 5
-#  mu_shape: .5
-
-matching:
-  use_type: False
-  use_shape: True
-  mu: 8.0
-  min_eigenvector_accept: 0.05
-  min_number: 8
-  min_inliers: 8
-  mu_shape: .1
+#  min_eigenvector_accept: 0.05
+#  min_number: 8
+#  min_inliers: 8
+#  mu_shape: 1.0

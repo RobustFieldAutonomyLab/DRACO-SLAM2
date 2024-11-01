@@ -2,11 +2,11 @@
 
 # different per dataset
 dataset:
-  sim: False              # if you are using simulated data or not
+  sim: True              # if you are using simulated data or not
                          # if True, the data loader grabs ground truth information
-  mission: "usmma_real"       # "plane" "usmma" "usmma_real"
+  mission: "plane"       # "plane" "usmma" "usmma_real"
   study_samples: 1       # number of re-run
-  total_slam_steps: 103  # number of steps in the slam mission
+  total_slam_steps: 80  # number of steps in the slam mission
                          # plane 80, usmma_sim 60, summa real 103
   num_robots: 3          # number of robots in the dataset
   mode: 0                # DRACO (0) or ALCS (1)
@@ -24,9 +24,11 @@ dataset:
     use_ringkey: False     # If you want to use ringkey for loop closure, not yet implemented
     max_dist: 6.0          # maximum distance to accept a potential loop closure
     max_angle: 50.0        # maximum angular distance to accept a potential loop closure
-    min_overlap: 0.5       # minimum overlap to accept a loop closure
+    min_overlap: 0.0       # minimum overlap to accept a loop closure
     cov_scale: 20.0        # scale for expand the loop closure fitness score to loop closure covariance
     icp: config/icp.yaml   # ICP parameters
+    window_size: 3         # window size for loop closure
+    visualize: False       # if you want to visualize the loop closure
 
 global_icp: # parameter for global ICP, see SHGO docs
   sampling_points: 500
