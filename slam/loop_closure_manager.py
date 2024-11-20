@@ -1,8 +1,10 @@
 import numpy as np
-import yaml
 from bruce_slam import pcl
 from slam.object_mapper import transform_points, state_to_matrix, matrix_to_state
 import matplotlib.pyplot as plt
+from itertools import combinations
+from collections import defaultdict
+from slam.utils import find_cliques
 
 
 class RobotMessage:
@@ -34,7 +36,6 @@ class LoopClosureMessage:
         self.target_keyframe_id = target_keyframe_id
         self.robot_id = robot_id
 
-        self.accept = False
         self.fitness_score = -1
         # from source keyframe to target keyframe
         # dT \dot T_source = T_target
@@ -45,9 +46,9 @@ class LoopClosureMessage:
 
         # covariance matrix based on the fitness score
         self.cov = None
+        self.added = False
 
     def set_measurement(self, pose, cov, fitness_score):
-        self.accept = True
         self.between_pose = pose
         self.cov = cov
         self.fitness_score = fitness_score
@@ -80,6 +81,10 @@ class LoopClosureManager:
         self.window_size = config['window_size']
 
         self.visualize = config['visualize']
+
+        self.min_pcm_value = config['min_pcm_value']
+        self.pcm_queue_size = config['pcm_queue_size']
+        self.min_num_points = config['min_num_points']
 
         # save history scan from robot self for loop closure detection
         self.historical_scans = []
@@ -118,6 +123,10 @@ class LoopClosureManager:
 
         # history loop
         self.loops = set()
+
+        self.loops_added = set()
+
+        self.robot_key_added = set()
 
         # ICP cloud registration for refine loop closures
         self.icp = pcl.ICP()
@@ -166,21 +175,30 @@ class LoopClosureManager:
                 idx, distances = pcl.match(target_cloud, source_cloud_transformed, 1, 0.5)
                 overlap = len(idx[idx != -1]) / len(idx[0])
                 # if not enough overlap, skip this loop candidate
-                if overlap < self.min_overlap:
-                    # self.loops.add(loop_this)
+                if overlap < self.min_overlap or len(source_cloud_transformed) < self.min_num_points:
                     continue
                 # finally, the loop closure is a satisfying one
                 source_pose_new = icp_transform @ state_to_matrix(source_pose)
-                between_pose = state_to_matrix(target_pose) @ np.linalg.inv(source_pose_new)
+                between_pose = np.linalg.inv(source_pose_new) @ state_to_matrix(target_pose)
                 fitness_score = np.mean(distances[distances < float("inf")])
-                cov = np.eye(3) * fitness_score * 20.0
+                cov = np.eye(3) * fitness_score * self.cov_scale
                 loop_this.set_measurement(pose=matrix_to_state(between_pose), cov=cov, fitness_score=fitness_score)
 
-                # evaluate the loop closure
-                source_truth = source_keyframe.pose_truth
-                target_truth = self.ground_truth_self[target_keyframe_id]
-                between_truth = source_truth.between(target_truth)
-                loop_this.between_pose_truth = between_truth
+                if self.ground_truth_self is not None:
+                    # evaluate the loop closure
+                    source_truth = source_keyframe.pose_truth
+                    target_truth = self.ground_truth_self[target_keyframe_id]
+                    between_truth = source_truth.between(target_truth)
+                    loop_this.between_pose_truth = between_truth
+                    if self.visualize:
+                        source_truth = matrix_to_state(
+                            state_to_matrix(target_pose) @ np.linalg.inv(
+                                state_to_matrix(np.array([between_truth.x(),
+                                                          between_truth.y(),
+                                                          between_truth.theta()]))))
+                        source_cloud_transformed3 = transform_points(self.points_neighbor[robot_id][id].points,
+                                                                     source_truth)
+                        plt.plot(source_cloud_transformed3[:, 0], source_cloud_transformed3[:, 1], 'y.')
 
                 if self.visualize:
                     plt.plot(source_cloud[:, 0], source_cloud[:, 1], 'r.')
@@ -188,9 +206,8 @@ class LoopClosureManager:
                     source_cloud_transformed2 = transform_points(self.points_neighbor[robot_id][id].points,
                                                                  source_pose_new)
                     plt.plot(source_cloud_transformed2[:, 0], source_cloud_transformed2[:, 1], 'g.')
-
                     plt.savefig(f"animate/loop/loop_"
-                                f"{self.robot_ns}_{target_keyframe_id}_{robot_id}_{id}:{overlap:.2f}.png")
+                                f"{self.robot_ns}_{target_keyframe_id}_{robot_id}_{id}:{overlap:.1f}.png")
                     plt.close()
 
                 self.loops.add(loop_this)
@@ -228,7 +245,7 @@ class LoopClosureManager:
         transformation[:2, 2] = t
         neighbor_keyframe_id_matched = set()
         for keyframe_id, keyframe in self.poses_neighbor[robot_id].items():
-            keyframe.pose_transformed = np.dot(transformation, keyframe.pose)
+            keyframe.pose_transformed = matrix_to_state(np.dot(transformation, state_to_matrix(keyframe.pose)))
             keyframe.covariance_transformed = np.dot(transformation, np.dot(keyframe.covariance, transformation.T))
             if self.use_ringkey:
                 # TODO: implement ringkey
@@ -239,7 +256,7 @@ class LoopClosureManager:
                 angular_dist = (latest_states_self[:, 2] - keyframe.pose_transformed[2]) % (2 * np.pi)
                 angular_dist[angular_dist > np.pi] -= 2 * np.pi
 
-                indices_angle = np.where(np.abs(angular_dist) < self.max_angle)[0]
+                indices_angle = np.where(np.abs(angular_dist) <= self.max_angle)[0]
                 indices_dist = np.where(dist < self.max_dist)[0]
 
                 indices = np.intersect1d(indices_angle, indices_dist)
@@ -253,3 +270,66 @@ class LoopClosureManager:
                     else:
                         neighbor_keyframe_id_matched.add(keyframe_id)
         return neighbor_keyframe_id_matched
+
+    def pcm(self, robot_id):
+        pass
+
+    def gcm(self, latest_states_self):
+        if len(self.loops) < self.min_pcm_value:
+            return []
+        G = defaultdict(list)
+        list_loop = list(self.loops)
+        for (id_ik, ret_ik), (id_jl, ret_jl) in combinations(zip(range(len(list_loop)), list_loop), 2):
+            # x_{ak}
+            x_ak = state_to_matrix(latest_states_self[ret_ik.target_keyframe_id, :])
+            # x_{bi}
+            x_bi = self.poses_neighbor[ret_ik.robot_id][ret_ik.source_keyframe_id]
+            x_a0bi = state_to_matrix(x_bi.pose_transformed)
+
+            # x_{al}
+            x_al = state_to_matrix(latest_states_self[ret_jl.target_keyframe_id, :])
+            x_cj = self.poses_neighbor[ret_jl.robot_id][ret_jl.source_keyframe_id]
+            x_a0cj = state_to_matrix(x_cj.pose_transformed)
+
+            # from b_i to a_k
+            z_ik = state_to_matrix(ret_ik.between_pose)
+            # from c_j to a_l
+            z_jl = state_to_matrix(ret_jl.between_pose)
+
+            x_bicj = np.linalg.inv(x_a0bi) @ x_a0cj
+            x_alak = np.linalg.inv(x_al) @ x_ak
+            z_bi_ak = x_bicj @ z_jl @ x_alak
+            e = matrix_to_state(np.linalg.inv(z_ik) @ z_bi_ak)
+            try:
+                md = e @ np.linalg.inv(ret_ik.cov) @ e
+                # chi2.ppf(0.99, 3) = 11.34
+
+                if md < 11.34:  # this is not a magic number
+                    G[id_ik].append(id_jl)
+                    G[id_jl].append(id_ik)
+            except:
+                pass
+
+        # find the sets of consistent loops
+        maximal_cliques = list(find_cliques(G))
+
+        # if we got nothing, return nothing
+        if not maximal_cliques:
+            return []
+
+        # sort and return only the largest set, also checking that the set is large enough
+        maximum_clique = sorted(maximal_cliques, key=len, reverse=True)[0]
+        if len(maximum_clique) < self.min_pcm_value:
+            return []
+
+        valid_loops = []
+        for i in maximum_clique:
+            if list_loop[i] in self.loops_added:
+                continue
+            valid_loops.append(list_loop[i])
+            self.loops_added.add(list_loop[i])
+
+        while len(self.loops) > self.pcm_queue_size:
+            self.loops.pop()
+
+        return valid_loops

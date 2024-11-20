@@ -54,7 +54,7 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
         graph = True
         if graph:
             # at each stamp, everybody update the graph with each other if there is anything new in the graph
-            for robot_id_target  in robots.keys():
+            for robot_id_target in robots.keys():
                 for robot_id_source in robots.keys():
                     if robot_id_target == robot_id_source:
                         continue
@@ -64,29 +64,35 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
 
                 keyframe_id_self, keyframe_id_to_request = robots[robot_id_target].perform_graph_match()
                 # if potential candidates are find, request the keyframes
-                if keyframe_id_to_request:
-                    for robot_id_source in keyframe_id_to_request.keys():
-                        if robot_id_target == robot_id_source:
-                            sys.stderr.write("Should not request from robot self!")
-                        # asking latest keyframe poses from neighbor
-                        pose_msgs = robots[robot_id_source].get_keyframes(keyframe_id_to_request[robot_id_source])
-                        # receive & process keyframe poses from neighbor
-                        scan_request_msg = (robots[robot_id_target].
-                                            receive_keyframes_from_neighbor(robot_id_source,
-                                                                            keyframe_id_to_request[robot_id_source],
-                                                                            pose_msgs))
-                        # asking scan from neighbor
-                        scan_msgs = robots[robot_id_source].get_scans(scan_request_msg)
-                        # receive & process scan from neighbor
-                        robots[robot_id_target].receive_scans_from_neighbor(robot_id_source,
-                                                                            scan_request_msg,
-                                                                            scan_msgs)
+                if not keyframe_id_to_request:
+                    continue
+                for robot_id_source in keyframe_id_to_request.keys():
+                    if robot_id_target == robot_id_source:
+                        sys.stderr.write("Should not request from robot self!")
+                    # asking latest keyframe poses from neighbor
+                    pose_msgs = robots[robot_id_source].get_keyframes(keyframe_id_to_request[robot_id_source])
+                    # receive & process keyframe poses from neighbor
+                    scan_request_msg = (robots[robot_id_target].
+                                        receive_keyframes_from_neighbor(robot_id_source,
+                                                                        keyframe_id_to_request[robot_id_source],
+                                                                        pose_msgs))
+                    # asking scan from neighbor
+                    scan_request_msg, scan_msgs = robots[robot_id_source].get_scans(scan_request_msg)
+                    # receive & process scan from neighbor
+                    robots[robot_id_target].receive_scans_from_neighbor(robot_id_source,
+                                                                        scan_request_msg,
+                                                                        scan_msgs)
+
+                valid_loops = robots[robot_id_target].perform_gcm()
+                if len(valid_loops) == 0:
+                    continue
+                robots[robot_id_target].add_inter_robot_loop_closure(valid_loops)
+
                 # time0 = time.time()
-                # robots[robot_id_target].object_detection.plot_figure()
+            for robot_id_target in robots.keys():
+                robots[robot_id_target].plot_figure()
                 # time1 = time.time()
                 # print(f"plot_figure time: {time1 - time0:.3f}")
-
-
 
         # search for loop closures
         search = False

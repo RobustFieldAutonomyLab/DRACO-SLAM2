@@ -3,7 +3,8 @@ import yaml
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
 from sklearn.cluster import DBSCAN
-from slam.object_detection import *
+# from slam.object_detection import *
+from slam.object_detection import Keyframe
 from scipy.optimize import linear_sum_assignment
 from slam.feature_extraction import FeatureExtraction
 import cv2
@@ -169,6 +170,7 @@ class ObjectMapper:
 
         self.objects = {}
         self.edges = []
+        self.points_history = []
         self.points = np.empty((0, 2))
         self.ids = np.empty((0, 1), dtype=int)
         self.poses = np.empty((0, 3))
@@ -201,24 +203,29 @@ class ObjectMapper:
         self.min_inliers = config_graph["matching"]["min_inliers"]
         self.object_rej_threshold = config_graph["matching"]["object_rej_threshold"]
 
-        if self.object_detection_method == "Gaussian":
-            self.object_detector = ObjectDetection(config)
+        # if self.object_detection_method == "Gaussian":
+        #     self.object_detector = ObjectDetection(config)
 
-    def add_object(self, keyframe: Keyframe):
-        if self.object_detection_method == "Gaussian":
-            self.add_object_Gaussian(keyframe)
-        elif self.object_detection_method == "DBSCAN":
-            self.add_object_dbscan(keyframe)
+    def add_object(self, keyframe: Keyframe, latest_states):
+        # if self.object_detection_method == "Gaussian":
+        #     self.add_object_Gaussian(keyframe)
+        if self.object_detection_method == "DBSCAN":
+            self.add_object_dbscan(keyframe, latest_states)
 
-    def add_object_dbscan(self, keyframe: Keyframe):
+    def add_object_dbscan(self, keyframe: Keyframe, latest_states):
         if keyframe.image is not None:
             points, sonarImg, visualize_img = self.feature_extractor.extract_features(keyframe.image)
             points = self.pixel2meter(points)
         else:
             points = keyframe.fusedCloud
         ids = np.full((points.shape[0], 1), keyframe.ID)
-        self.poses = np.concatenate([self.poses, np.array([keyframe.pose])], axis=0)
-        self.points = np.concatenate([self.points, transform_points(points, keyframe.pose)], axis=0)
+        # self.poses = np.concatenate([self.poses, np.array([keyframe.pose])], axis=0)
+        self.poses = latest_states
+        self.points_history.append(points)
+        points = np.empty((0, 2))
+        for cloud in self.points_history:
+            points = np.concatenate([self.points, transform_points(cloud, keyframe.pose)], axis=0)
+        self.points = points
         self.ids = np.concatenate([self.ids, ids], axis=0)
 
         # dbscan = DBSCAN(eps=1.2, min_samples=10)
@@ -315,12 +322,12 @@ class ObjectMapper:
             if not transformation_estimation_success:
                 continue
             print(f"Transformation estimated: {transformation}")
-            print(f"Matched objects: {object_inlier_ids}")
+            # print(f"Matched objects: {object_inlier_ids}")
             self.transformations_neighbor[robot_ns_neighbor] = transformation
             # step 2.5: re-match nodes based on the transformation estimation
             if self.re_match:
                 object_inlier_ids = self.re_match_nodes(self.objects, robot_graph_neighbor[0], transformation)
-                print(f"Matched objects after re-match: {object_inlier_ids}")
+                # print(f"Matched objects after re-match: {object_inlier_ids}")
             # step 3: generate request keyframe from neighbor robot
             request_dict[robot_ns_neighbor] = self.get_request_keyframe_id(robot_graph_neighbor[0],
                                                                            object_inlier_ids[:, 1])
@@ -505,7 +512,7 @@ class ObjectMapper:
             e_s_mat = e_s_mat * d_t_mat
 
         time1 = time.time()
-        print(f"Time calculate batch: {time1 - time0}")
+        # print(f"Time calculate batch: {time1 - time0}")
 
         return e_s_mat
 
@@ -560,13 +567,7 @@ class ObjectMapper:
         return copy.deepcopy(self.objects), copy.deepcopy(self.edges)
 
     def plot_figure(self):
-
-        plt.figure(figsize=(8, 8), dpi=150)
         plt.scatter(self.points[:, 0], self.points[:, 1], s=1, c='k')
-        plt.plot(self.poses[:, 0], self.poses[:, 1], 'co')
-        # cloud = keyframe.fusedCloud
-        #
-        # plt.scatter(cloud[:, 0], cloud[:, 1], s=1, c='g')
 
         for k, (neighbor_objects, _) in self.graphs_neighbor.items():
             if k not in self.transformations_neighbor:
@@ -582,12 +583,6 @@ class ObjectMapper:
                 self.plot_objects(neighbor_objects, R, t, color_pt='lightcoral', color_obj='orange')
 
         self.plot_objects(self.objects, np.eye(2), np.zeros([2]), color_pt='lightgreen', color_obj='green')
-
-        plt.xlim([-80, 80])
-        plt.ylim([-80, 80])
-        # plt.axis('equal')
-        plt.savefig('test_data/' + str(self.robot_ns) + '/' + str(self.poses.shape[0]) + '.png')
-        plt.close()
 
     def plot_objects(self, objects, R, t, color_pt='lightblue', color_obj='r'):
         if t.sum() != 0:
