@@ -187,6 +187,7 @@ class Robot():
         if self.slam_step == 0:
             self.start_graph()
             self.update_graph()
+            self.update_scene_graph()
         if self.slam_step + 1 >= self.total_steps:
             self.is_shutdown = True
         if not self.is_shutdown:
@@ -194,7 +195,7 @@ class Robot():
             self.add_factors()
 
         self.update_graph()
-        self.animate_step(path)
+        self.update_scene_graph()
 
     def update_scene_graph(self):
         if len(self.images) != 0:

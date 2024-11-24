@@ -154,7 +154,7 @@ class LoopClosureManager:
 
     def perform_icp(self, robot_id, latest_states_self):
         if robot_id not in self.points_id_neighbor:
-            return 0
+            return
 
         for id in self.points_id_neighbor[robot_id]:
             source_keyframe = self.poses_neighbor[robot_id][id]

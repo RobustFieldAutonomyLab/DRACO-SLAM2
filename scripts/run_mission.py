@@ -53,8 +53,6 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
         # exchange the graph
         graph = True
         if graph:
-            for robot_id in robots.keys():
-                robots[robot_id].update_scene_graph()
             # at each stamp, everybody update the graph with each other if there is anything new in the graph
             for robot_id_target in robots.keys():
                 for robot_id_source in robots.keys():
@@ -103,6 +101,8 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
         # search for loop closures
         search = False
         if search:
+            for robot_id in robots.keys():
+                robots[robot_id].animate_step(output_folder)
             for robot_id_source in robots.keys():
                 for robot_id_target in robots.keys():
                     if robot_id_target == robot_id_source:

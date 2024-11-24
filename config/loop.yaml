@@ -13,7 +13,7 @@ visualize: False        # if you want to visualize the loop closure
 pcm_type: 1             # 0: nothing, 1: pcm, 2: gcm
 min_pcm_value: 2        # minimum number of loop closure to perform pcm
 min_num_points: 20      # minimum number of points to perform loop closure
-pcm_queue_size: 50     # size of the queue for pcm
+pcm_queue_size: 5000     # size of the queue for pcm
 num_scan_one_time: 5    # maximum number of scans to send to neighbor each time
 
 inter_factor_type: 1    # 0: prior, 1: between, 2: whole graph
