@@ -8,9 +8,10 @@ import pickle
 import os
 import time
 import copy
+from slam.loop_closure_manager import compute_covariance
 
-from slam.utils import create_full_cloud, get_all_context, get_points, verify_pcm, X, robot_to_symbol, numpy_to_gtsam, \
-    transform_points
+from slam.utils import create_full_cloud, get_all_context, get_points, verify_pcm, X, robot_to_symbol, numpy_to_gtsam
+from slam.utils import transform_points as transform_points_gtsam
 
 from slam.loop_closure import LoopClosure
 from slam.object_detection import Keyframe
@@ -184,7 +185,6 @@ class Robot():
         """
         # TODO: make poses update in real-time for the object detection
         if self.slam_step == 0:
-            self.update_scene_graph()
             self.start_graph()
             self.update_graph()
         if self.slam_step + 1 >= self.total_steps:
@@ -192,9 +192,9 @@ class Robot():
         if not self.is_shutdown:
             self.slam_step += 1
             self.add_factors()
-            self.update_scene_graph()
+
         self.update_graph()
-        # self.animate_step(path)
+        self.animate_step(path)
 
     def update_scene_graph(self):
         if len(self.images) != 0:
@@ -567,7 +567,7 @@ class Robot():
 
         self.inter_robot_loop_closures += loop_closures
         self.update_graph()  # upate the graph with the new info\
-        write_g2o(self.isam.getFactorsUnsafe(), self.isam.calculateEstimate(), "multi_robot.g2o")
+        # write_g2o(self.isam.getFactorsUnsafe(), self.isam.calculateEstimate(), "multi_robot.g2o")
 
     def update_partner_trajectory(self, robot_id: int, trajectory: np.array) -> int:
         """Update the trajectory. This is from the other robot performing SLAM.
@@ -717,7 +717,7 @@ class Robot():
         for robot in self.partner_robot_exchange_costs.keys():
             self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
 
-    def run_metrics(self, mission: str, mode: int, study_step: int) -> None:
+    def run_metrics(self, path = "") -> None:
         """Get and save some metrics about the mission 
 
         Args:
@@ -785,7 +785,7 @@ class Robot():
         data_log["alcs_reg_time"] = self.alcs_reg_time
         data_log["alcs_run_time"] = self.alcs_run_time
         data_log["draco_reg_time"] = self.draco_reg_time
-        with open('results/' + mission + "/" + str(self.robot_id) + "_" + str(mode) + "_" + str(study_step) + '.pickle',
+        with open(f"{path}test_data/{self.mission}_{self.robot_id}.pickle",
                   'wb') as handle:
             pickle.dump(data_log, handle)
 
@@ -847,7 +847,7 @@ class Robot():
 
         # draw the point clouds
         for cloud, pose in zip(self.points, self.state_estimate):
-            cloud = transform_points(cloud, numpy_to_gtsam(pose))
+            cloud = transform_points_gtsam(cloud, numpy_to_gtsam(pose))
             plt.scatter(cloud[:, 1], cloud[:, 0], c="black", s=5)
 
         for robot in self.possible_loops.keys():
@@ -1004,12 +1004,10 @@ class Robot():
 
     def get_keyframes(self, keyframe_id_set):
         msgs = {}
-        values = self.isam.calculateEstimate()
         for keyframe_id in keyframe_id_set:
             pose_array = self.state_estimate[keyframe_id, :]
             covariance = self.covariance[keyframe_id, :, :]
             if self.truth is not None:
-
                 pose_array_truth = self.truth[keyframe_id]
             else:
                 pose_array_truth = None
@@ -1019,12 +1017,16 @@ class Robot():
                                covariance=covariance,
                                pose_truth=pose_array_truth)
             msgs[keyframe_id] = msg
+            if self.loop_closure_manager.inter_factor_type == 2:
+                msgs[-1] = self.state_estimate
         return msgs
 
     def receive_graph_from_neighbor(self, neighbor_id, graph):
         self.object_detection.graphs_neighbor[neighbor_id] = graph
 
     def receive_keyframes_from_neighbor(self, neighbor_id, ids, keyframes):
+        if -1 in keyframes.keys():
+            self.partner_robot_trajectories[neighbor_id] = keyframes.pop(-1, None)
         self.loop_closure_manager.add_keyframes_neighbor(neighbor_id, ids, keyframes)
         try:
             self.loop_closure_manager.transformations_neighbor[neighbor_id] = (
@@ -1046,75 +1048,137 @@ class Robot():
                     self.loop_closure_manager.get_ids_pose_not_received(robot_id, keyframe_id_to_request[robot_id]))
         return keyframe_id_self, keyframe_id_to_request
 
-    def get_scans(self, keyframe_id_set):
-        msgs = {}
-        msgs_id_set = set()
-        for keyframe_id in keyframe_id_set:
-            if len(self.points[keyframe_id]) < self.loop_closure_manager.min_num_points:
-                continue
-            msg = ScanMessage(robot_id=self.robot_id, keyframe_id=keyframe_id, points=self.points[keyframe_id])
-            msgs[keyframe_id] = msg
-            msgs_id_set.add(keyframe_id)
-        return msgs_id_set, msgs
+    def get_scans(self, robot_id_to, keyframe_id_set):
+        return self.loop_closure_manager.get_keyframes(robot_id_to, keyframe_id_set)
 
     def receive_scans_from_neighbor(self, neighbor_id, ids, keyframes):
+        if len(keyframes) == 0:
+            return
         self.loop_closure_manager.add_scans_neighbor(neighbor_id, ids, keyframes)
         self.loop_closure_manager.perform_icp(neighbor_id, self.state_estimate)
 
     def perform_gcm(self):
-        return self.loop_closure_manager.gcm(self.state_estimate)
+        time0 = time.time()
+        loops = self.loop_closure_manager.perform_pcm(self.state_estimate)
+        time1 = time.time()
+        self.pcm_run_time.append([time1-time0])
+        self.icp_success_count = len(self.loop_closure_manager.loops_added)
+        return loops
 
     def add_inter_robot_loop_closure(self, loop_closures):
+        neighbor_robot_state_to_update = set()
         for loop in loop_closures:
             source_ch = chr(96 + loop.robot_id)
             source_id = loop.source_keyframe_id
             target_id = loop.target_keyframe_id
             source_key = gtsam.symbol(source_ch, source_id)
             target_key = X(target_id)
+
+            # part 1: add between factors
             between_pose = gtsam.Pose2(loop.between_pose[0],
                                        loop.between_pose[1],
                                        loop.between_pose[2])
-            factor_btwn = gtsam.BetweenFactorPose2(source_key, target_key,
-                                                   between_pose,
-                                                   gtsam.noiseModel.Diagonal.Sigmas(np.array(self.prior_sigmas)))
+            if self.loop_closure_manager.noise_model_type == 0:
+                noise_model = self.create_robust_noise_model(self.prior_sigmas)
+            elif self.loop_closure_manager.noise_model_type == 1:
+                noise_model = gtsam.noiseModel.Gaussian.Covariance(loop.cov)
+            else:
+                noise_model = gtsam.noiseModel.Diagonal.Sigmas(np.array(self.prior_sigmas))
+
+            factor_btwn = gtsam.BetweenFactorPose2(source_key, target_key, between_pose, noise_model)
             self.graph.add(factor_btwn)
 
             source_pose_msg = self.loop_closure_manager.poses_neighbor[loop.robot_id][source_id]
             if source_key not in self.loop_closure_manager.robot_key_added:
-                if loop.robot_id not in self.source_key_before:
-                    self.source_key_before[loop.robot_id] = source_id
-                    self.loop_closure_manager.robot_key_added.add(source_key)
-                    target_pose = gtsam.Pose2(self.state_estimate[target_id][0],
-                                              self.state_estimate[target_id][1],
-                                              self.state_estimate[target_id][2])
-                    self.values.insert(source_key,
-                                       target_pose.compose(between_pose.inverse()))
+                # add initial value for inter-robot loop closure
+                self.loop_closure_manager.robot_key_added.add(source_key)
+                # target_pose = gtsam.Pose2(self.state_estimate[target_id][0],
+                #                           self.state_estimate[target_id][1],
+                #                           self.state_estimate[target_id][2])
+                # self.values.insert(source_key,
+                #                    target_pose.compose(between_pose.inverse()))
+                source_pose = gtsam.Pose2(source_pose_msg.pose_transformed[0],
+                                          source_pose_msg.pose_transformed[1],
+                                          source_pose_msg.pose_transformed[2])
+                self.values.insert(source_key,source_pose)
+
+                if self.loop_closure_manager.inter_factor_type == 0:
+                    self.add_inter_robot_priori_factor(loop)
+                elif self.loop_closure_manager.inter_factor_type == 1:
+                    self.add_inter_robot_between_facter(loop)
                 else:
-                    source_0_ch = chr(96 + loop.robot_id)
-                    source_0_id = self.source_key_before[loop.robot_id]
-                    source_0_key = gtsam.symbol(source_0_ch, source_0_id)
-                    source_0_pose = self.loop_closure_manager.poses_neighbor[loop.robot_id][source_0_id].pose
-                    source_1_pose = self.loop_closure_manager.poses_neighbor[loop.robot_id][source_id].pose
-                    source_btwn = gtsam.Pose2(source_0_pose[0], source_0_pose[1], source_0_pose[2]).between(
-                        gtsam.Pose2(source_1_pose[0], source_1_pose[1], source_1_pose[2]))
-                    factor_btwn = gtsam.BetweenFactorPose2(source_0_key, source_key,
-                                                           source_btwn,
-                                                           gtsam.noiseModel.Gaussian.Covariance(
-                                                               source_pose_msg.covariance_transformed))
-                    self.loop_closure_manager.robot_key_added.add(source_key)
-                    self.graph.add(factor_btwn)
-                    target_pose = gtsam.Pose2(self.state_estimate[target_id][0],
-                                              self.state_estimate[target_id][1],
-                                              self.state_estimate[target_id][2])
-                    self.values.insert(source_key,
-                                       target_pose.compose(between_pose.inverse()))
+                    neighbor_robot_state_to_update.add(loop.robot_id)
+        if neighbor_robot_state_to_update:
+            for robot_id in neighbor_robot_state_to_update:
+                self.add_inter_robot_whole_graph(robot_id)
         self.update_graph()
 
-    def plot_figure(self):
+    def add_inter_robot_priori_factor(self, loop):
+        source_ch = chr(96 + loop.robot_id)
+        source_id = loop.source_keyframe_id
+        source_key = gtsam.symbol(source_ch, source_id)
+        source_keyframe = self.loop_closure_manager.poses_neighbor[loop.robot_id][source_id]
+        source_pose = source_keyframe.pose
+        prior_pose = gtsam.Pose2(source_pose[0], source_pose[1], source_pose[2])
+        priori_factor = gtsam.PriorFactorPose2(source_key, prior_pose, source_keyframe.covariance_transformed)
+        self.graph.add(priori_factor)
+
+    def add_inter_robot_between_facter(self, loop):
+        if loop.robot_id not in self.source_key_before:
+            # no between factor for the first keyframe
+            self.source_key_before[loop.robot_id] = loop.source_keyframe_id
+            return
+        # between factor key 0
+        source_ch = chr(96 + loop.robot_id)
+        source_0_id = self.source_key_before[loop.robot_id]
+        source_0_key = gtsam.symbol(source_ch, source_0_id)
+        source_0_pose_msg = self.loop_closure_manager.poses_neighbor[loop.robot_id][source_0_id]
+        source_0_pose = source_0_pose_msg.pose_transformed
+        # between factor key 1
+        source_1_id = loop.source_keyframe_id
+        source_1_key = gtsam.symbol(source_ch, source_1_id)
+        source_1_pose_msg = self.loop_closure_manager.poses_neighbor[loop.robot_id][source_1_id]
+        source_1_pose = source_1_pose_msg.pose_transformed
+        # construct between pose
+        source_btwn = gtsam.Pose2(source_0_pose[0], source_0_pose[1], source_0_pose[2]).between(
+            gtsam.Pose2(source_1_pose[0], source_1_pose[1], source_1_pose[2]))
+        # propagate the noise model
+        cov0 = source_0_pose_msg.covariance_transformed
+        cov1 = source_1_pose_msg.covariance_transformed
+        cov_btwn = compute_covariance(state_to_matrix(source_0_pose), state_to_matrix(source_1_pose), cov0, cov1)
+        source_noise_model = gtsam.noiseModel.Gaussian.Covariance(cov_btwn)
+        factor_btwn = gtsam.BetweenFactorPose2(source_0_key, source_1_key,
+                                               source_btwn, source_noise_model)
+        # update the previous key
+        self.source_key_before[loop.robot_id] = loop.source_keyframe_id
+        self.graph.add(factor_btwn)
+
+    def add_inter_robot_whole_graph(self, robot_id):
+        transformation_matrix = self.loop_closure_manager.transformations_neighbor[robot_id]
+        for i in range(self.partner_robot_trajectories[robot_id].shape[0] - 1):
+            pose_0 = state_to_matrix(self.partner_robot_trajectories[robot_id][i, :])  # get the poses in gtsam
+            pose_1 = state_to_matrix(self.partner_robot_trajectories[robot_id][i + 1, :])
+
+            pose_0 = matrix_to_state(transformation_matrix @ pose_0)  # place in the correct ref frame
+            pose_1 = matrix_to_state(transformation_matrix @ pose_1)
+            pose_between = gtsam.Pose2(pose_0[0], pose_0[1], pose_0[2]).between(
+                            gtsam.Pose2(pose_1[0], pose_1[1], pose_1[2]))
+            # get the pose between them and package as a factor
+            ch = chr(96 + robot_id)
+            factor = gtsam.BetweenFactorPose2(gtsam.symbol(ch, i),
+                                              gtsam.symbol(ch, i + 1),
+                                              pose_between,
+                                              self.prior_model)  # TODO update noise model
+            self.graph.add(factor)
+            self.values.add(gtsam.symbol(ch, i+1), gtsam.Pose2(pose_1[0], pose_1[1], pose_1[2]))
+            if i == 0:
+                self.values.add(gtsam.symbol(ch, 0), gtsam.Pose2(pose_0[0], pose_0[1], pose_0[2]))
+
+    def plot_figure(self, path):
         plt.figure(figsize=(8, 8), dpi=150)
         # self.object_detection.plot_figure()
 
-        plt.plot(self.state_estimate[:, 0], self.state_estimate[:, 1], 'co')
+        plt.plot(self.state_estimate[:, 0], self.state_estimate[:, 1], 'c-')
         plt.scatter(self.object_detection.points[:, 0], self.object_detection.points[:, 1], s=1, c='k')
         values = self.isam.calculateEstimate()
 
@@ -1128,11 +1192,6 @@ class Robot():
                 color = 'orange'
             id = loop.source_keyframe_id
             points = self.loop_closure_manager.points_neighbor[robot_ns][id].points
-            # pose = (state_to_matrix(self.state_estimate[loop.target_keyframe_id]) @
-            #         np.linalg.inv(state_to_matrix(loop.between_pose)))
-            # plt.scatter(pose[0], pose[1], c=color, s=20, edgecolors='black')
-            # points1 = transform_points(points, pose)
-            # plt.scatter(points1[:,0], points1[:,1], s=1, c=color, alpha=0.5)
             pose = values.atPose2(gtsam.symbol(chr(96 + robot_ns), id))
             points = transform_points(points, np.array([pose.x(), pose.y(), pose.theta()]))
             plt.scatter(pose.x(), pose.y(), c=color, s=20)
@@ -1141,7 +1200,8 @@ class Robot():
         plt.xlim([-80, 80])
         plt.ylim([-80, 80])
         plt.axis('equal')
-        plt.savefig('test_data/' + str(self.robot_id) + '/' + str(self.slam_step) + '.png')
+
+        plt.savefig(path + 'test_data/' + str(self.robot_id) + '/' + str(self.slam_step) + '.png')
         plt.close()
 
 

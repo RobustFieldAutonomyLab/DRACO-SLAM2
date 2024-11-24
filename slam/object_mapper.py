@@ -223,9 +223,10 @@ class ObjectMapper:
         self.poses = latest_states
         self.points_history.append(points)
         points = np.empty((0, 2))
-        for cloud in self.points_history:
-            points = np.concatenate([self.points, transform_points(cloud, keyframe.pose)], axis=0)
+        for i, cloud in enumerate(self.points_history):
+            points = np.concatenate([points, transform_points(cloud, latest_states[i, :])], axis=0)
         self.points = points
+        # self.points = np.concatenate([self.points, transform_points(points, latest_states[-1, :])], axis=0)
         self.ids = np.concatenate([self.ids, ids], axis=0)
 
         # dbscan = DBSCAN(eps=1.2, min_samples=10)

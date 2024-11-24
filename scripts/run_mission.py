@@ -53,6 +53,8 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
         # exchange the graph
         graph = True
         if graph:
+            for robot_id in robots.keys():
+                robots[robot_id].update_scene_graph()
             # at each stamp, everybody update the graph with each other if there is anything new in the graph
             for robot_id_target in robots.keys():
                 for robot_id_source in robots.keys():
@@ -62,27 +64,31 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
                     robots[robot_id_target].receive_graph_from_neighbor(robot_id_source,
                                                                         robots[robot_id_source].get_graph())
 
-                keyframe_id_self, keyframe_id_to_request = robots[robot_id_target].perform_graph_match()
+                _, keyframe_id_to_request = robots[robot_id_target].perform_graph_match()
                 # if potential candidates are find, request the keyframes
-                if not keyframe_id_to_request:
-                    continue
-                for robot_id_source in keyframe_id_to_request.keys():
-                    if robot_id_target == robot_id_source:
-                        sys.stderr.write("Should not request from robot self!")
-                    # asking latest keyframe poses from neighbor
-                    pose_msgs = robots[robot_id_source].get_keyframes(keyframe_id_to_request[robot_id_source])
-                    # receive & process keyframe poses from neighbor
-                    scan_request_msg = (robots[robot_id_target].
-                                        receive_keyframes_from_neighbor(robot_id_source,
-                                                                        keyframe_id_to_request[robot_id_source],
-                                                                        pose_msgs))
+                # exchange the keyframes
+                for robot_id_source in robots.keys():
+                    if robot_id_source == robot_id_target:
+                        continue
+                    if robot_id_source in keyframe_id_to_request.keys():
+                        id_to_request_this = keyframe_id_to_request[robot_id_source]
+                        # asking latest keyframe poses from neighbor
+                        # no limits on poses passing
+                        pose_msgs = robots[robot_id_source].get_keyframes(id_to_request_this)
+                        # receive & process keyframe poses from neighbor
+                        scan_request_msg = (robots[robot_id_target].receive_keyframes_from_neighbor(robot_id_source,
+                                                                                                    id_to_request_this,
+                                                                                                    pose_msgs))
+                    else:
+                        scan_request_msg = set()
+
                     # asking scan from neighbor
-                    scan_request_msg, scan_msgs = robots[robot_id_source].get_scans(scan_request_msg)
+                    # limits the number of scan passing each time
+                    scan_request_msg, scan_msgs = robots[robot_id_source].get_scans(robot_id_target, scan_request_msg)
                     # receive & process scan from neighbor
                     robots[robot_id_target].receive_scans_from_neighbor(robot_id_source,
                                                                         scan_request_msg,
                                                                         scan_msgs)
-
                 valid_loops = robots[robot_id_target].perform_gcm()
                 if len(valid_loops) == 0:
                     continue
@@ -90,7 +96,7 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
 
                 # time0 = time.time()
             for robot_id_target in robots.keys():
-                robots[robot_id_target].plot_figure()
+                robots[robot_id_target].plot_figure(output_folder)
                 # time1 = time.time()
                 # print(f"plot_figure time: {time1 - time0:.3f}")
 
@@ -149,6 +155,8 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
                             loop_list.append(valid)
                             utils.plot_loop(valid, f"{output_folder}{mission}/loop/")
 
+    for robot_id, robot in robots.items():
+        robot.run_metrics(output_folder)
 
 def main():
     parser = argparse.ArgumentParser(description="Process some data.")
@@ -159,7 +167,7 @@ def main():
     parser.add_argument("-y", "--input_yaml", type=str,
                         default="config/param.yaml", help="Yaml file for all parameters")
     parser.add_argument("-o", "--output", type=str,
-                        default="/home/rfal/Documents/data/animate/", help="Output image directory")
+                        default="/home/rfal/Documents/DC-DRACO/animate/", help="Output image directory")
 
     args = parser.parse_args()
 
@@ -169,6 +177,7 @@ def main():
     print(f"If simulation mode: {config['dataset']['sim']}.")
     for study_step in range(config['dataset']['study_samples']):
         run(args.input_bag, args.input_pickle, args.input_yaml, args.output)
+
 
 
 if __name__ == "__main__":

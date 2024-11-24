@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 from bruce_slam import pcl
 from slam.object_mapper import transform_points, state_to_matrix, matrix_to_state
@@ -5,6 +7,7 @@ import matplotlib.pyplot as plt
 from itertools import combinations
 from collections import defaultdict
 from slam.utils import find_cliques
+import yaml
 
 
 class RobotMessage:
@@ -66,10 +69,19 @@ class LoopClosureMessage:
         return False
 
 
+def loop_per_robot(loops, key_func):
+    classified = defaultdict(set)
+    for loop in loops:
+        classified[key_func(loop)].add(loop)
+    return classified
+
+
 class LoopClosureManager:
-    def __init__(self, robot_ns, config):
+    def __init__(self, robot_ns, config_path):
         self.robot_ns = robot_ns
         # loop closure parameters
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file)
         self.config = config
         self.max_dist = config['max_dist']
         self.max_angle = config['max_angle'] * (np.pi / 180)
@@ -85,6 +97,11 @@ class LoopClosureManager:
         self.min_pcm_value = config['min_pcm_value']
         self.pcm_queue_size = config['pcm_queue_size']
         self.min_num_points = config['min_num_points']
+        self.num_scan_one_time = config['num_scan_one_time']
+
+        self.inter_factor_type = config['inter_factor_type']
+        self.noise_model_type = config['noise_model_type']
+        self.pcm_type = config['pcm_type']
 
         # save history scan from robot self for loop closure detection
         self.historical_scans = []
@@ -128,13 +145,16 @@ class LoopClosureManager:
 
         self.robot_key_added = set()
 
+        # keyframe ids to be published to the neighbor robots
+        self.keyframe_id_to_publish = {}
+
         # ICP cloud registration for refine loop closures
         self.icp = pcl.ICP()
         self.icp.loadFromYaml(self.icp_config)
 
     def perform_icp(self, robot_id, latest_states_self):
         if robot_id not in self.points_id_neighbor:
-            return
+            return 0
 
         for id in self.points_id_neighbor[robot_id]:
             source_keyframe = self.poses_neighbor[robot_id][id]
@@ -180,8 +200,10 @@ class LoopClosureManager:
                 # finally, the loop closure is a satisfying one
                 source_pose_new = icp_transform @ state_to_matrix(source_pose)
                 between_pose = np.linalg.inv(source_pose_new) @ state_to_matrix(target_pose)
+
                 fitness_score = np.mean(distances[distances < float("inf")])
                 cov = np.eye(3) * fitness_score * self.cov_scale
+                cov[2,2] = cov[2,2] * 0.01
                 loop_this.set_measurement(pose=matrix_to_state(between_pose), cov=cov, fitness_score=fitness_score)
 
                 if self.ground_truth_self is not None:
@@ -218,7 +240,7 @@ class LoopClosureManager:
     def add_keyframes_neighbor(self, robot_id, ids, keyframes):
         if robot_id in self.poses_neighbor:
             self.poses_neighbor[robot_id].update(keyframes)
-            self.poses_id_neighbor[robot_id].union(ids)
+            self.poses_id_neighbor[robot_id] = self.poses_id_neighbor[robot_id].union(ids)
         else:
             self.poses_neighbor[robot_id] = keyframes
             self.poses_id_neighbor[robot_id] = ids
@@ -226,7 +248,7 @@ class LoopClosureManager:
     def add_scans_neighbor(self, robot_id, ids, scans):
         if robot_id in self.points_neighbor:
             self.points_neighbor[robot_id].update(scans)
-            self.points_id_neighbor[robot_id].union(ids)
+            self.points_id_neighbor[robot_id] = self.points_id_neighbor[robot_id].union(ids)
         else:
             self.points_neighbor[robot_id] = scans
             self.points_id_neighbor[robot_id] = ids
@@ -271,8 +293,83 @@ class LoopClosureManager:
                         neighbor_keyframe_id_matched.add(keyframe_id)
         return neighbor_keyframe_id_matched
 
-    def pcm(self, robot_id):
-        pass
+    def pcm(self, latest_states_self):
+        if len(self.loops) < self.min_pcm_value:
+            return []
+        graph_dict = loop_per_robot(self.loops, lambda r: r.robot_id)
+        loops_accepted = set()
+        for robot_id, subset in graph_dict.items():
+            loops_accepted.update(self.pcm_one_robot(subset, latest_states_self))
+        return list(loops_accepted)
+
+    def pcm_one_robot(self, loops, latest_states_self):
+        if len(loops) < self.min_pcm_value:
+            return []
+        G = defaultdict(list)
+        list_loop = list(loops)
+        for (id_ik, ret_ik), (id_jl, ret_jl) in combinations(zip(range(len(list_loop)), list_loop), 2):
+            # x_{ak}
+            x_ak = state_to_matrix(latest_states_self[ret_ik.target_keyframe_id, :])
+            # x_{bi}
+            x_bi = self.poses_neighbor[ret_ik.robot_id][ret_ik.source_keyframe_id]
+            x_a0bi = state_to_matrix(x_bi.pose_transformed)
+
+            # x_{al}
+            x_al = state_to_matrix(latest_states_self[ret_jl.target_keyframe_id, :])
+            x_bj = self.poses_neighbor[ret_jl.robot_id][ret_jl.source_keyframe_id]
+            x_a0bj = state_to_matrix(x_bj.pose_transformed)
+
+            # from b_i to a_k
+            z_ik = state_to_matrix(ret_ik.between_pose)
+            # from c_j to a_l
+            z_jl = state_to_matrix(ret_jl.between_pose)
+
+            x_bibj = np.linalg.inv(x_a0bi) @ x_a0bj
+            x_alak = np.linalg.inv(x_al) @ x_ak
+            z_bi_ak = x_bibj @ z_jl @ x_alak
+            e = matrix_to_state(np.linalg.inv(z_ik) @ z_bi_ak)
+            try:
+                md = e @ np.linalg.inv(ret_ik.cov) @ e
+                # chi2.ppf(0.99, 3) = 11.34
+
+                if md < 11.34:  # this is not a magic number
+                    G[id_ik].append(id_jl)
+                    G[id_jl].append(id_ik)
+            except:
+                pass
+
+        # find the sets of consistent loops
+        maximal_cliques = list(find_cliques(G))
+
+        # if we got nothing, return nothing
+        if not maximal_cliques:
+            return []
+
+        # sort and return only the largest set, also checking that the set is large enough
+        maximum_clique = sorted(maximal_cliques, key=len, reverse=True)[0]
+        if len(maximum_clique) < self.min_pcm_value:
+            return []
+
+        valid_loops = []
+        for i in maximum_clique:
+            if list_loop[i] in self.loops_added:
+                continue
+            valid_loops.append(copy.deepcopy(list_loop[i]))
+            self.loops_added.add(copy.deepcopy(list_loop[i]))
+
+        while len(loops) > self.pcm_queue_size:
+            loop_to_delete = loops.pop()
+            self.loops.discard(loop_to_delete)
+
+        return valid_loops
+
+    def perform_pcm(self, latest_states_self):
+        if self.pcm_type == 0:
+            return self.loops
+        elif self.pcm_type == 1:
+            return self.pcm(latest_states_self)
+        else:
+            return self.gcm(latest_states_self)
 
     def gcm(self, latest_states_self):
         if len(self.loops) < self.min_pcm_value:
@@ -326,10 +423,53 @@ class LoopClosureManager:
         for i in maximum_clique:
             if list_loop[i] in self.loops_added:
                 continue
-            valid_loops.append(list_loop[i])
-            self.loops_added.add(list_loop[i])
+            valid_loops.append(copy.deepcopy(list_loop[i]))
+            self.loops_added.add(copy.deepcopy(list_loop[i]))
 
         while len(self.loops) > self.pcm_queue_size:
             self.loops.pop()
 
         return valid_loops
+
+    def get_keyframes(self, robot_id_to, keyframe_id_set):
+        msgs = {}
+        msgs_id_set = set()
+        if robot_id_to in self.keyframe_id_to_publish.keys():
+            self.keyframe_id_to_publish[robot_id_to] = self.keyframe_id_to_publish[robot_id_to].union(keyframe_id_set)
+        else:
+            self.keyframe_id_to_publish[robot_id_to] = keyframe_id_set
+        while self.keyframe_id_to_publish[robot_id_to]:
+            keyframe_id = self.keyframe_id_to_publish[robot_id_to].pop()
+            if len(self.historical_scans[keyframe_id]) < self.min_num_points:
+                continue
+            msgs[keyframe_id] = ScanMessage(robot_id=self.robot_ns,
+                                            keyframe_id=keyframe_id,
+                                            points=self.historical_scans[keyframe_id])
+            msgs_id_set.add(keyframe_id)
+            if len(msgs) >= self.num_scan_one_time:
+                break
+        return msgs_id_set, msgs
+
+
+def compute_covariance(T1, T2, cov1, cov2):
+    # Adjoint matrix of T (SE(2) transformation)
+    def adjoint(T):
+        R = T[:2, :2]
+        t = T[:2, 2]
+        adj = np.zeros((3, 3))
+        adj[:2, :2] = R.T
+        adj[:2, 2] = -R.T @ t
+        adj[2, 2] = 1
+        return adj
+
+    # Compute the adjoint of T1^{-1} (the transformation in SE(2))
+    Ad_T1_inv = adjoint(np.linalg.inv(T1))
+
+    # Compute Jacobians:
+    # For T1^{-1}, we use the adjoint of T1^{-1}
+    # For T2, the Jacobian is the identity matrix in SE(2)
+    J1 = Ad_T1_inv
+
+    # Propagate covariance: cov12 = Ad_T1_inv @ cov2 @ Ad_T1_inv.T + cov1
+    cov12 = J1 @ cov2 @ J1.T + cov1
+    return cov12

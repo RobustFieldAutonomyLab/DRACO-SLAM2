@@ -19,19 +19,7 @@ dataset:
     model: models/real_data_model.h5
     feature_extraction: config/feature.yaml
     graph_matching: config/graph.yaml
-
-  loop_closure:
-    use_ringkey: False     # If you want to use ringkey for loop closure, not yet implemented
-    max_dist: 20.0          # maximum distance to accept a potential loop closure
-    max_angle: 180.0        # maximum angular distance to accept a potential loop closure
-    min_overlap: 0.5       # minimum overlap to accept a loop closure
-    cov_scale: 20.0        # scale for expand the loop closure fitness score to loop closure covariance
-    icp: config/icp.yaml   # ICP parameters
-    window_size: 3         # window size for loop closure
-    visualize: False        # if you want to visualize the loop closure
-    min_pcm_value: 2       # minimum number of loop closure to perform pcm
-    min_num_points: 50
-    pcm_queue_size: 5
+  loop_closure: config/loop.yaml
 
 global_icp: # parameter for global ICP, see SHGO docs
   sampling_points: 500
