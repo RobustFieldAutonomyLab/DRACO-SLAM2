@@ -449,11 +449,16 @@ class LoopClosureManager:
                 continue
             valid_loops.append(copy.deepcopy(list_loop[i]))
             self.loops_added.add(copy.deepcopy(list_loop[i]))
+            self.neighbor_added.add(copy.deepcopy(list_loop[i].robot_id))
 
+        graph = loop_per_robot(self.loops.values(), lambda r: r.checked)
+        print(f"valid loops: {len(list_loop)} {len(graph[False])}")
         while len(list_loop) > self.pcm_queue_size:
             loop_to_delete = list_loop.pop(0)
             loop_key = (loop_to_delete.robot_id, loop_to_delete.source_keyframe_id, loop_to_delete.target_keyframe_id)
             self.loops[loop_key].checked = True
+        graph = loop_per_robot(self.loops.values(), lambda r: r.checked)
+        print(f"After valid loops: {len(list_loop)} {len(graph[False])}")
 
         return valid_loops
 

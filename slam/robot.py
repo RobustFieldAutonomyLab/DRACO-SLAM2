@@ -1325,6 +1325,7 @@ class Robot():
         robot_self_file_path = f"{path}test_data/{self.mission}_{self.robot_id}_self.txt"
         state_estimate = self.state_estimate
         for robot_id in sorted(self.partner_robot_state_estimates.keys()):
+            print(robot_id)
             state_estimate = np.concatenate((state_estimate, self.partner_robot_state_estimates[robot_id]))
         write_trajectory(robot_self_file_path, state_estimate)
         if self.truth is not None:
