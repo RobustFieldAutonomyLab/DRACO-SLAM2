@@ -2,7 +2,7 @@
 use_ringkey: False      # If you want to use ringkey for loop closure, not yet implemented
 max_dist: 20.0          # maximum distance to accept a potential loop closure
 max_angle: 180.0        # maximum angular distance to accept a potential loop closure
-min_overlap: 0.65       # minimum overlap to accept a loop closure
+min_overlap: 0.5       # minimum overlap to accept a loop closure
 #    min_overlap: 0.85        # minimum overlap to accept a loop closure
 
 cov_scale: 20.0         # scale for expand the loop closure fitness score to loop closure covariance
@@ -10,11 +10,13 @@ icp: config/icp.yaml    # ICP parameters
 window_size: 3          # window size for loop closure
 visualize: False        # if you want to visualize the loop closure
 
-pcm_type: 1             # 0: nothing, 1: pcm, 2: gcm
+pcm_type: 2             # 0: nothing, 1: pcm, 2: gcm
 min_pcm_value: 2        # minimum number of loop closure to perform pcm
-min_num_points: 20      # minimum number of points to perform loop closure
-pcm_queue_size: 5000     # size of the queue for pcm
+min_num_points: 30      # minimum number of points to perform loop closure
+pcm_queue_size: 5     # size of the queue for pcm
 num_scan_one_time: 5    # maximum number of scans to send to neighbor each time
 
-inter_factor_type: 1    # 0: prior, 1: between, 2: whole graph
+inter_factor_type: 2    # 0: prior, 1: between, 2: whole graph
 noise_model_type: 2     # 0: fixed default, 1: icp fitness score, 2: robust noise model
+
+exchange_inter_robot_factor: True # if you want to exchange inter robot factors

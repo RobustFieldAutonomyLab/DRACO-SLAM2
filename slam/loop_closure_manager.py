@@ -1,5 +1,6 @@
 import copy
 
+import gtsam
 import numpy as np
 from bruce_slam import pcl
 from slam.object_mapper import transform_points, state_to_matrix, matrix_to_state
@@ -49,7 +50,7 @@ class LoopClosureMessage:
 
         # covariance matrix based on the fitness score
         self.cov = None
-        self.added = False
+        self.checked = False
 
     def set_measurement(self, pose, cov, fitness_score):
         self.between_pose = pose
@@ -102,6 +103,7 @@ class LoopClosureManager:
         self.inter_factor_type = config['inter_factor_type']
         self.noise_model_type = config['noise_model_type']
         self.pcm_type = config['pcm_type']
+        self.exchange_inter_robot_factor = config['exchange_inter_robot_factor']
 
         # save history scan from robot self for loop closure detection
         self.historical_scans = []
@@ -137,9 +139,13 @@ class LoopClosureManager:
         # key: neighbor robot_id
         # value: ndarray transformation from neighbor robot to self robot`
         self.transformations_neighbor = {}
+        self.transformations_graph = gtsam.NonlinearFactorGraph()
+        self.transformations_neighbor_optimized = {}
 
         # history loop
-        self.loops = set()
+        # key: tuple(robot_id, source_keyframe_id, target_keyframe_id)
+        # value: LoopClosureMessage
+        self.loops = {}
 
         self.loops_added = set()
 
@@ -151,6 +157,13 @@ class LoopClosureManager:
         # ICP cloud registration for refine loop closures
         self.icp = pcl.ICP()
         self.icp.loadFromYaml(self.icp_config)
+
+        # Neighbor factors to add into the graph once inter-robot loop closure is detected
+        self.factors_neighbor = {}
+        self.neighbor_added = set()
+
+        # list of inter-robot loop closures to be added
+        self.inter_loops_to_add = []
 
     def perform_icp(self, robot_id, latest_states_self):
         if robot_id not in self.points_id_neighbor:
@@ -173,7 +186,8 @@ class LoopClosureManager:
                 # TODO: This is only meaningful if the inter-robot map merging is correct, or this would cause problem.
                 # TODO: Try to fix this by introducing the map merging result also into consideration.
                 # if loop already been processed before, do not process it again
-                if loop_this in self.loops:
+                loop_key = (robot_id, id, target_keyframe_id)
+                if loop_key in self.loops.keys():
                     continue
                 target_pose = latest_states_self[target_keyframe_id]
                 # target_cloud = T_icp \cdot T_frame \cdot T_{neighbor_state} \cdot source_cloud
@@ -203,7 +217,7 @@ class LoopClosureManager:
 
                 fitness_score = np.mean(distances[distances < float("inf")])
                 cov = np.eye(3) * fitness_score * self.cov_scale
-                cov[2,2] = cov[2,2] * 0.01
+                # cov[2, 2] = cov[2, 2] * 0.1
                 loop_this.set_measurement(pose=matrix_to_state(between_pose), cov=cov, fitness_score=fitness_score)
 
                 if self.ground_truth_self is not None:
@@ -232,7 +246,7 @@ class LoopClosureManager:
                                 f"{self.robot_ns}_{target_keyframe_id}_{robot_id}_{id}:{overlap:.1f}.png")
                     plt.close()
 
-                self.loops.add(loop_this)
+                self.loops[loop_key] = loop_this
 
     def add_scan(self, scan):
         self.historical_scans.append(scan)
@@ -296,7 +310,8 @@ class LoopClosureManager:
     def pcm(self, latest_states_self):
         if len(self.loops) < self.min_pcm_value:
             return []
-        graph_dict = loop_per_robot(self.loops, lambda r: r.robot_id)
+        graph_dict = loop_per_robot(self.loops.values(), lambda r: r.checked)
+        graph_dict = loop_per_robot(graph_dict[False], lambda r: r.robot_id)
         loops_accepted = set()
         for robot_id, subset in graph_dict.items():
             loops_accepted.update(self.pcm_one_robot(subset, latest_states_self))
@@ -312,12 +327,12 @@ class LoopClosureManager:
             x_ak = state_to_matrix(latest_states_self[ret_ik.target_keyframe_id, :])
             # x_{bi}
             x_bi = self.poses_neighbor[ret_ik.robot_id][ret_ik.source_keyframe_id]
-            x_a0bi = state_to_matrix(x_bi.pose_transformed)
+            x_a0bi = state_to_matrix(x_bi.pose)
 
             # x_{al}
             x_al = state_to_matrix(latest_states_self[ret_jl.target_keyframe_id, :])
             x_bj = self.poses_neighbor[ret_jl.robot_id][ret_jl.source_keyframe_id]
-            x_a0bj = state_to_matrix(x_bj.pose_transformed)
+            x_a0bj = state_to_matrix(x_bj.pose)
 
             # from b_i to a_k
             z_ik = state_to_matrix(ret_ik.between_pose)
@@ -356,26 +371,35 @@ class LoopClosureManager:
                 continue
             valid_loops.append(copy.deepcopy(list_loop[i]))
             self.loops_added.add(copy.deepcopy(list_loop[i]))
-
+            self.neighbor_added.add(copy.deepcopy(list_loop[i].robot_id))
+        graph = loop_per_robot(self.loops.values(), lambda r: r.checked)
+        print(f"valid loops: {len(loops)} {len(graph[False])}")
         while len(loops) > self.pcm_queue_size:
             loop_to_delete = loops.pop()
-            self.loops.discard(loop_to_delete)
+            loop_key = (loop_to_delete.robot_id, loop_to_delete.source_keyframe_id, loop_to_delete.target_keyframe_id)
+            self.loops[loop_key].checked = True
+        graph = loop_per_robot(self.loops.values(), lambda r: r.checked)
+        print(f"After valid loops: {len(loops)} {len(graph[False])}")
 
         return valid_loops
 
     def perform_pcm(self, latest_states_self):
         if self.pcm_type == 0:
-            return self.loops
+            loops = self.loops.values()
         elif self.pcm_type == 1:
-            return self.pcm(latest_states_self)
+            loops = self.pcm(latest_states_self)
         else:
-            return self.gcm(latest_states_self)
+            loops = self.gcm(latest_states_self)
+        # Add transformation from valid loop to the transformation optimization factor graph
+        self.add_valid_loops_to_transformations_graph(loops, latest_states_self)
+        return loops
 
     def gcm(self, latest_states_self):
         if len(self.loops) < self.min_pcm_value:
             return []
+        graph_dict = loop_per_robot(self.loops.values(), lambda r: r.checked)
         G = defaultdict(list)
-        list_loop = list(self.loops)
+        list_loop = list(graph_dict[False])
         for (id_ik, ret_ik), (id_jl, ret_jl) in combinations(zip(range(len(list_loop)), list_loop), 2):
             # x_{ak}
             x_ak = state_to_matrix(latest_states_self[ret_ik.target_keyframe_id, :])
@@ -426,10 +450,26 @@ class LoopClosureManager:
             valid_loops.append(copy.deepcopy(list_loop[i]))
             self.loops_added.add(copy.deepcopy(list_loop[i]))
 
-        while len(self.loops) > self.pcm_queue_size:
-            self.loops.pop()
+        while len(list_loop) > self.pcm_queue_size:
+            loop_to_delete = list_loop.pop(0)
+            loop_key = (loop_to_delete.robot_id, loop_to_delete.source_keyframe_id, loop_to_delete.target_keyframe_id)
+            self.loops[loop_key].checked = True
 
         return valid_loops
+
+    def add_valid_loops_to_transformations_graph(self, loops, latest_states_self):
+        for loop in loops:
+            id_0 = loop.source_keyframe_id
+            ch_0 = loop.robot_id
+            id_1 = loop.target_keyframe_id
+            ch_1 = self.robot_ns
+            matrix_neighbor = state_to_matrix(self.poses_neighbor[ch_0][id_0].pose)
+            matrix_target = state_to_matrix(latest_states_self[id_1, :])
+            matrix_between = state_to_matrix(loop.between_pose)
+            matrix_self = matrix_target @ np.linalg.inv(matrix_between)
+            pose_transformation = matrix_to_state(matrix_self @ np.linalg.inv(matrix_neighbor))
+
+
 
     def get_keyframes(self, robot_id_to, keyframe_id_set):
         msgs = {}
@@ -449,6 +489,30 @@ class LoopClosureManager:
             if len(msgs) >= self.num_scan_one_time:
                 break
         return msgs_id_set, msgs
+
+    def prepare_loops_to_send(self, loops):
+        if not self.exchange_inter_robot_factor:
+            return []
+        msgs = []
+        for loop in loops:
+            msg = {
+                'r0': loop.robot_id,
+                'key0': loop.source_keyframe_id,
+                'r1': self.robot_ns,
+                'key1': loop.target_keyframe_id,
+                'pose': loop.between_pose,
+                'cov': loop.cov}
+            msgs.append(msg)
+
+        return msgs
+
+    def get_transformation(self, robot_id):
+        if robot_id in self.transformations_neighbor_optimized.keys():
+            return self.transformations_neighbor_optimized[robot_id]
+        elif robot_id in self.transformations_neighbor.keys():
+            return self.transformations_neighbor[robot_id]
+        else:
+            return None
 
 
 def compute_covariance(T1, T2, cov1, cov2):

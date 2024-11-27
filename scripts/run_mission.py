@@ -54,47 +54,50 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
         graph = True
         if graph:
             # at each stamp, everybody update the graph with each other if there is anything new in the graph
-            for robot_id_target in robots.keys():
-                for robot_id_source in robots.keys():
-                    if robot_id_target == robot_id_source:
+            for id_target, robot_target in robots.items():
+                # receive info
+                for id_source, robot_source in robots.items():
+                    if id_target == id_source:
                         continue
                     # exchange the graph with neighbor
-                    robots[robot_id_target].receive_graph_from_neighbor(robot_id_source,
-                                                                        robots[robot_id_source].get_graph())
+                    robot_target.receive_graph_from_neighbor(id_source, robot_source.get_graph())
+                    robot_target.receive_latest_states_from_neighbor(id_source, robot_source.state_estimate)
+                    robot_target.receive_factors_from_neighbor(id_source, robot_source.get_factors_current())
 
-                _, keyframe_id_to_request = robots[robot_id_target].perform_graph_match()
+                _, keyframe_id_to_request = robot_target.perform_graph_match()
                 # if potential candidates are find, request the keyframes
                 # exchange the keyframes
-                for robot_id_source in robots.keys():
-                    if robot_id_source == robot_id_target:
+                for id_source, robot_source in robots.items():
+                    if id_source == id_target:
                         continue
-                    if robot_id_source in keyframe_id_to_request.keys():
-                        id_to_request_this = keyframe_id_to_request[robot_id_source]
+                    if id_source in keyframe_id_to_request.keys():
+                        id_to_request_this = keyframe_id_to_request[id_source]
                         # asking latest keyframe poses from neighbor
                         # no limits on poses passing
-                        pose_msgs = robots[robot_id_source].get_keyframes(id_to_request_this)
+                        pose_msgs = robot_source.get_keyframes(id_to_request_this)
                         # receive & process keyframe poses from neighbor
-                        scan_request_msg = (robots[robot_id_target].receive_keyframes_from_neighbor(robot_id_source,
-                                                                                                    id_to_request_this,
-                                                                                                    pose_msgs))
+                        scan_request_msg = (robot_target.receive_keyframes_from_neighbor(id_source,
+                                                                                         id_to_request_this,
+                                                                                         pose_msgs))
                     else:
                         scan_request_msg = set()
 
                     # asking scan from neighbor
                     # limits the number of scan passing each time
-                    scan_request_msg, scan_msgs = robots[robot_id_source].get_scans(robot_id_target, scan_request_msg)
+                    scan_request_msg, scan_msgs = robot_source.get_scans(id_target, scan_request_msg)
                     # receive & process scan from neighbor
-                    robots[robot_id_target].receive_scans_from_neighbor(robot_id_source,
-                                                                        scan_request_msg,
-                                                                        scan_msgs)
-                valid_loops = robots[robot_id_target].perform_gcm()
+                    robot_target.receive_scans_from_neighbor(id_source, scan_request_msg, scan_msgs)
+                valid_loops = robot_target.perform_gcm()
                 if len(valid_loops) == 0:
                     continue
-                robots[robot_id_target].add_inter_robot_loop_closure(valid_loops)
+                robot_target.add_inter_robot_loop_closure(valid_loops)
+                inter_loop_msgs = robot_target.prepare_loops_to_send(valid_loops)
+                for id_source, robot_source in robots.items():
+                    robot_source.receive_loops_from_neighbor(inter_loop_msgs)
 
                 # time0 = time.time()
-            for robot_id_target in robots.keys():
-                robots[robot_id_target].plot_figure(output_folder)
+            for robot_target in robots.values():
+                robot_target.plot_figure(output_folder)
                 # time1 = time.time()
                 # print(f"plot_figure time: {time1 - time0:.3f}")
 
@@ -156,7 +159,9 @@ def run(input_bag: str, input_pickle: str, input_yaml: str, output_folder: str):
                             utils.plot_loop(valid, f"{output_folder}{mission}/loop/")
 
     for robot_id, robot in robots.items():
-        robot.run_metrics(output_folder)
+        # robot.run_metrics(output_folder)
+        robot.write_all_trajectories(output_folder)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Process some data.")
@@ -177,7 +182,6 @@ def main():
     print(f"If simulation mode: {config['dataset']['sim']}.")
     for study_step in range(config['dataset']['study_samples']):
         run(args.input_bag, args.input_pickle, args.input_yaml, args.output)
-
 
 
 if __name__ == "__main__":
