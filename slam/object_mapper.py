@@ -11,6 +11,7 @@ import cv2
 import time
 from scipy.sparse.linalg import eigs
 import copy
+import seaborn as sns
 
 
 # Everything related to the object map
@@ -178,6 +179,7 @@ class ObjectMapper:
 
         self.graphs_neighbor = {}
         self.transformations_neighbor = {}
+        self.latest_image = None
 
         # graph construction and matching parameters
         with open(config["graph_matching"], 'r') as file:
@@ -212,9 +214,16 @@ class ObjectMapper:
         if self.object_detection_method == "DBSCAN":
             self.add_object_dbscan(keyframe, latest_states)
 
+    def plot_latest_sonar_image(self, ax):
+        ax.imshow(self.latest_image, cmap='gray', interpolation='nearest')
+        ax.set_xticks([])
+        ax.set_yticks([])
+
     def add_object_dbscan(self, keyframe: Keyframe, latest_states):
         if keyframe.image is not None:
             points, sonarImg, visualize_img = self.feature_extractor.extract_features(keyframe.image)
+            self.latest_image = sonarImg
+            # points = keyframe.fusedCloud
             points = self.pixel2meter(points)
         else:
             points = keyframe.fusedCloud
@@ -234,7 +243,7 @@ class ObjectMapper:
         labels = dbscan.fit_predict(self.points)
 
         unique_labels = set(labels)  # Get unique cluster labels (-1 for noise)
-
+        objects_old = copy.deepcopy(self.objects)
         self.objects = {}
         for label in unique_labels:
             if label == -1:
@@ -247,11 +256,14 @@ class ObjectMapper:
                          1)
             obj.keys = set(self.ids[labels == label].flatten())
             ratio = max(rect) / (min(rect) + 0.01)
+            # rect = (float(int(rect[0])), float(int(rect[1])))
             obj.dimension = rect
             if ratio > 4 and max(rect) > 5:
                 obj.object_type = 1
             else:
                 obj.object_type = 2
+            if max(rect) < 3:
+                continue
             self.objects[label] = obj
             self.objects[label].id = label
         self.reconstruct_edges()
@@ -305,7 +317,7 @@ class ObjectMapper:
                 if dist < self.max_edge_distance:
                     self.edges.append((node0.id, node1.id, dist))
 
-    def compare_all_neighbor_graph(self):
+    def compare_all_neighbor_graph(self, optimized_transformation):
         self_dict = {}
         request_dict = {}
         for robot_ns_neighbor, robot_graph_neighbor in self.graphs_neighbor.items():
@@ -323,13 +335,17 @@ class ObjectMapper:
             if not transformation_estimation_success:
                 continue
             print(f"Transformation estimated: {transformation}")
-            # print(f"Matched objects: {object_inlier_ids}")
+            print(f"Matched objects: {object_inlier_ids}")
             self.transformations_neighbor[robot_ns_neighbor] = transformation
             # step 2.5: re-match nodes based on the transformation estimation
             if self.re_match:
+                # if robot_ns_neighbor in optimized_transformation:
+                # transformation = optimized_transformation[robot_ns_neighbor]
                 object_inlier_ids = self.re_match_nodes(self.objects, robot_graph_neighbor[0], transformation)
-                # print(f"Matched objects after re-match: {object_inlier_ids}")
+                print(f"Matched objects after re-match: {object_inlier_ids}")
             # step 3: generate request keyframe from neighbor robot
+            if len(object_inlier_ids) == 0:
+                continue
             request_dict[robot_ns_neighbor] = self.get_request_keyframe_id(robot_graph_neighbor[0],
                                                                            object_inlier_ids[:, 1])
             self_dict[robot_ns_neighbor] = self.get_request_keyframe_id(self.objects, ids_pair[:, 0])
@@ -411,6 +427,7 @@ class ObjectMapper:
         # solve NP-hard question using principal eigen vector of edge_similarity_mat S
         A_star = get_principal_eigen_vector(S)
         A_star_matrix = A_star.reshape(N, M)
+
         node_matching = self.linear_assignment(A_star_matrix)
         if len(node_matching) == 0:
             return False, None, None
@@ -568,40 +585,32 @@ class ObjectMapper:
         return copy.deepcopy(self.objects), copy.deepcopy(self.edges)
 
     def plot_figure(self):
-        plt.scatter(self.points[:, 0], self.points[:, 1], s=1, c='k')
-
+        # plt.scatter(self.points[:, 0], self.points[:, 1], s=1, c='k')
+        co_pa = sns.color_palette('colorblind')
+        co_pa[1] = co_pa[0]
         for k, (neighbor_objects, _) in self.graphs_neighbor.items():
             if k not in self.transformations_neighbor:
                 R = np.eye(2)
                 t = np.zeros([2])
             else:
                 (R, t) = self.transformations_neighbor[k]
-            if k == 1:
-                self.plot_objects(neighbor_objects, R, t, color_pt='lightblue', color_obj='blue')
-            if k == 2:
-                self.plot_objects(neighbor_objects, R, t, color_pt='lightpink', color_obj='red')
-            if k == 3:
-                self.plot_objects(neighbor_objects, R, t, color_pt='lightcoral', color_obj='orange')
+                angle = 50 / 180 * np.pi
+            self.plot_objects(neighbor_objects, R, t, color_obj=co_pa[k])
 
-        self.plot_objects(self.objects, np.eye(2), np.zeros([2]), color_pt='lightgreen', color_obj='green')
+        self.plot_objects(self.objects, np.eye(2), np.zeros([2]), color_obj=co_pa[self.robot_ns])
 
-    def plot_objects(self, objects, R, t, color_pt='lightblue', color_obj='r'):
+    def plot_objects(self, objects, R, t, color_obj='r'):
         if t.sum() != 0:
             print("transformation: ", R, t)
         for obj in objects.values():
             # plt.plot(obj.points_transformed[:, 0], obj.points_transformed[:, 1], color_pt)
-            if obj.object_type == 0:
-                color = 'green'
-            elif obj.object_type == 1:
-                color = 'blue'
-            else:
-                color = 'orange'
             bounding_box = np.dot(R, obj.bounding_box_transformed.T).T + t
             center = np.dot(R, obj.center.T).T + t
             plt.plot(bounding_box[:, 0],
                      bounding_box[:, 1],
-                     color_obj, alpha=1)
-            if obj.associated_object_id != -1:
-                plt.plot([center[0], self.objects[obj.associated_object_id].center[0]],
-                         [center[1], self.objects[obj.associated_object_id].center[1]],
-                         color_obj, alpha=1)
+                     c=color_obj, alpha=1)
+            # co_pa = sns.color_palette('colorblind')
+            # if obj.associated_object_id != -1:
+            #     plt.plot([center[0], self.objects[obj.associated_object_id].center[0]],
+            #              [center[1], self.objects[obj.associated_object_id].center[1]],
+            #              c=co_pa[-1], alpha=1, linestyle = '--')

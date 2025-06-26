@@ -16,7 +16,8 @@ from slam.utils import transform_points as transform_points_gtsam
 from slam.loop_closure import LoopClosure
 from slam.object_detection import Keyframe
 from slam.object_mapper import ObjectMapper, transform_points, matrix_to_state, state_to_matrix
-from slam.loop_closure_manager import LoopClosureManager, RobotMessage, ScanMessage
+from slam.loop_closure_manager import LoopClosureManager, RobotMessage, ScanMessage, LoopClosureMessage
+import seaborn as sns
 
 
 def write_trajectory(path, states):
@@ -31,11 +32,43 @@ def write_trajectory(path, states):
                 x = state.x()
                 y = state.y()
                 theta = state.theta()
-            half_theta = theta/2.0
+            half_theta = theta / 2.0
             file.write(f"{i:.2f} {x} {y} 0.0 0.0 0.0 {np.sin(half_theta)} {np.cos(half_theta)}\n")
 
 
-class Robot():
+def write_g2o(graph, values, filename):
+    factors = [graph.at(i) for i in range(graph.size())]
+    lines = []
+    for factor in factors:
+        if isinstance(factor, gtsam.BetweenFactorPose2):
+            keys = factor.keys()
+            key0 = gtsam.Symbol(keys[0])
+            ch0 = chr(key0.chr())
+            id0 = key0.index()
+            measure = factor.measured()
+            key1 = gtsam.Symbol(keys[1])
+            ch1 = chr(key1.chr())
+            id1 = key1.index()
+            cov = factor.noiseModel().covariance()
+            lines.append(f'Between: {ch0}{id0} & {ch1}{id1}, ['
+                         f'{measure.x():.2f} {measure.y():.2f} {measure.theta():.2f}], \n'
+                         f'{cov}\n')
+        if isinstance(factor, gtsam.PriorFactorPose2):
+            keys = factor.keys()
+            key = gtsam.Symbol(keys[0])
+            ch = chr(key.chr())
+            id = key.index()
+            prior = factor.prior()
+            cov = factor.noiseModel().covariance()
+            lines.append(f'Prior: {ch}{id}, [{prior.x():.2f} {prior.y():.2f} {prior.theta():.2f}], \n'
+                         f'{cov}\n')
+
+    with open(filename, "w") as file:
+        for line in lines:
+            file.write(line)
+
+
+class Robot:
     def __init__(self, robot_id: int, data: dict, run_config: dict, sc_config: dict):
 
         self.robot_id = robot_id  # unique ID number
@@ -69,6 +102,10 @@ class Robot():
         self.isam_params = gtsam.ISAM2Params()
         self.isam = gtsam.ISAM2(self.isam_params)
         self.isam_combined = None
+        self.isam_local = gtsam.ISAM2(self.isam_params)
+        self.graph_local = gtsam.NonlinearFactorGraph()
+        self.values_local = gtsam.Values()
+        self.local_state_estimate = []
         self.state_estimate = []  # my own state estimate
         self.covariance = []
         self.partner_robot_state_estimates = {}  # my estimates about the other robots
@@ -79,7 +116,7 @@ class Robot():
         self.partner_robot_exchange_costs = {}
         self.my_exchange_costs = None
 
-        self.prior_sigmas = [0.2, 0.2, 0.02]
+        self.prior_sigmas = [0.1, 0.1, 0.01]
         self.prior_model = self.create_noise_model(self.prior_sigmas)
         self.partner_robot_model = self.create_noise_model([0.05, 0.05, 0.005])
 
@@ -118,6 +155,7 @@ class Robot():
         #                            "feature_extraction": "config/feature.yaml"}
         self.object_detection = ObjectMapper(robot_id, run_config['object_detection'])
         self.loop_closure_manager = LoopClosureManager(robot_id, run_config['loop_closure'])
+        self.graph_computation_time = []
         if self.truth is not None:
             self.loop_closure_manager.ground_truth_self = self.truth
         self.update_poses = run_config['update_poses']
@@ -210,8 +248,8 @@ class Robot():
             self.slam_step += 1
             self.add_factors()
 
-        self.update_graph()
-        self.update_scene_graph()
+            self.update_graph()
+            self.update_scene_graph()
 
     def update_scene_graph(self):
         if len(self.images) != 0:
@@ -224,8 +262,9 @@ class Robot():
                                 self.poses[self.slam_step],
                                 None,
                                 self.points[self.slam_step])
-        self.object_detection.add_object(keyframe, self.state_estimate)
+        self.object_detection.add_object(keyframe, self.local_state_estimate)
         self.loop_closure_manager.add_scan(self.points[self.slam_step])
+        self.loop_closure_manager.add_context(self.context[self.slam_step])
 
     def start_graph(self) -> None:
         """Start the SLAM graph by inserting the prior.
@@ -234,7 +273,9 @@ class Robot():
         pose = self.poses_g[0]
         factor = gtsam.PriorFactorPose2(X(0), pose, self.prior_model)
         self.graph.add(factor)
+        self.graph_local.add(factor)
         self.values.insert(X(0), pose)
+        self.values_local.insert(X(0), pose)
         self.values_added[0] = True
 
     def add_factors(self) -> None:
@@ -257,8 +298,10 @@ class Robot():
 
             if j not in self.values_added:
                 self.values.insert(X(j), self.poses_g[j])
+                self.values_local.insert(X(j), self.poses_g[j])
                 self.values_added[j] = True
             self.graph.add(factor_gtsam)
+            self.graph_local.add(factor_gtsam)
 
     def get_keys(self) -> np.array:
         """Return the array of ring keys from this SLAM step
@@ -443,8 +486,13 @@ class Robot():
 
         # push the newest factors into the ISAM2 instance
         self.isam.update(self.graph, self.values)
+        self.isam.update()
+        self.isam.update()
         self.graph.resize(0)  # clear the graph and values once we push it to ISAM2
         self.values.clear()
+        self.isam_local.update(self.graph_local, self.values_local)
+        self.graph_local.resize(0)
+        self.values_local.clear()
         isam = gtsam.ISAM2(self.isam)  # make a copy
 
         # add and update the partner robot trajectories
@@ -465,6 +513,12 @@ class Robot():
             temp_2.append(cov)
         self.state_estimate = np.array(temp)
         self.covariance = np.array(temp_2)
+
+        local_values = self.isam_local.calculateEstimate()
+        self.local_state_estimate = np.zeros([self.slam_step + 1, 3])
+        for x in range(self.slam_step + 1):
+            pose = local_values.atPose2(X(x))
+            self.local_state_estimate[x, :] = np.array([pose.x(), pose.y(), pose.theta()])
 
         # update my the estimate of my partner robots in my frame
         for robot in self.partner_robot_state_estimates.keys():
@@ -533,10 +587,11 @@ class Robot():
         """
 
         for loop in loop_closures:
-
-            if loop.target_robot_id in self.multi_robot_frames:
-                if loop.target_key in self.multi_robot_frames[loop.target_robot_id]:
-                    continue
+            if loop.source_robot_id != self.robot_id:
+                continue
+            # if loop.target_robot_id in self.multi_robot_frames:
+            #     if loop.target_key in self.multi_robot_frames[loop.target_robot_id]:
+            #         continue
 
             self.icp_success_count += 1
 
@@ -544,8 +599,7 @@ class Robot():
             source_symbol = X(loop.source_key)
             target_symbol = robot_to_symbol(loop.target_robot_id, loop.target_key)
             noise_model = self.create_noise_model(self.prior_sigmas)  #TODO update noise model
-            if loop.method == "alcs":
-                print("using robust noise model")
+            if loop.method == "alcs" or robust:
                 noise_model = self.create_robust_noise_model(self.prior_sigmas)
 
             '''if loop.method == "alcs":
@@ -577,10 +631,10 @@ class Robot():
                 self.multi_robot_frames[loop.target_robot_id][loop.target_key] = True
                 self.values.insert(target_symbol, loop.target_pose)  # add the initial guess
 
-        # see if we need to set the reference frame for this partner robot
-        if loop.target_robot_id not in self.partner_reference_frames:
-            self.partner_reference_frames[loop.target_robot_id] = loop.target_pose.compose(
-                loop.target_pose_their_frame.inverse())
+            # see if we need to set the reference frame for this partner robot
+            if loop.target_robot_id not in self.partner_reference_frames:
+                self.partner_reference_frames[loop.target_robot_id] = loop.target_pose.compose(
+                    loop.target_pose_their_frame.inverse())
 
         self.inter_robot_loop_closures += loop_closures
         self.update_graph()  # upate the graph with the new info\
@@ -733,78 +787,6 @@ class Robot():
         max_val = np.max(max_list)
         for robot in self.partner_robot_exchange_costs.keys():
             self.partner_robot_exchange_costs[robot] = self.partner_robot_exchange_costs[robot] / max_val
-
-    def run_metrics(self, path="") -> None:
-        """Get and save some metrics about the mission 
-
-        Args:
-            mission(str): the mission we are running 
-            mode (int): the mode the mission was in 
-            study_step (int): the step in the study, the ith mission
-        """
-
-        euclidan_error = []
-        rotational_error = []
-
-        # euclidian error and rotation
-        if self.truth is not None:
-            truth_ref_frame = self.truth[0]
-            for pose_est, pose_true in zip(self.state_estimate, self.truth):
-                pose_est = numpy_to_gtsam(pose_est)
-                pose_true = truth_ref_frame.between(pose_true)
-                diff = pose_est.between(pose_true)
-                euclidan_error.append(np.sqrt(diff.x() ** 2 + diff.y() ** 2))
-                rotational_error.append(np.degrees(diff.theta()))
-            euclidan_error = np.array(euclidan_error)
-            rotational_error = np.array(rotational_error)
-            self.mse = np.mean(euclidan_error ** 2)
-            self.rmse = np.sqrt(np.mean(euclidan_error ** 2))
-
-            # How good are we are estimating our partners location
-            for robot in self.partner_robot_state_estimates.keys():
-
-                euclidan_error = []
-                rotational_error = []
-
-                truth_ref_frame = self.truth[0]
-                for step in self.partner_robot_state_estimates[robot].keys():
-                    pose_est = self.partner_robot_state_estimates[robot][step]
-                    pose_true = self.partner_truth[robot][step]
-                    pose_true = truth_ref_frame.between(pose_true)
-                    diff = pose_est.between(pose_true)
-                    euclidan_error.append(np.sqrt(diff.x() ** 2 + diff.y() ** 2))
-                    rotational_error.append(np.degrees(diff.theta()))
-                euclidan_error = np.array(euclidan_error)
-                rotational_error = np.array(rotational_error)
-                # print(np.mean(euclidan_error), np.sqrt(np.mean(euclidan_error**2)))
-
-        # uncertainty
-        team_uncertainty = {}
-        for robot in self.partner_robot_state_estimates.keys():
-            temp = []
-            counter = []
-            for i in range(len(self.partner_robot_covariance[robot])):
-                temp.append(np.linalg.det(self.partner_robot_covariance[robot][i]))
-                counter.append(i)
-            team_uncertainty[robot] = (counter, temp)
-        self.team_uncertainty = team_uncertainty
-
-        # print(self.mse,self.rmse)
-
-        data_log = {}
-        data_log["mse"] = self.mse
-        data_log["rmse"] = self.rmse
-        data_log["covariance"] = self.partner_robot_covariance
-        data_log["my_covariance"] = self.covariance
-        data_log["icp_count"] = self.icp_count
-        data_log["icp_success_count"] = self.icp_success_count
-        data_log["pcm_run_time"] = self.pcm_run_time
-        data_log["alcs_reg_time"] = self.alcs_reg_time
-        data_log["alcs_run_time"] = self.alcs_run_time
-        data_log["draco_reg_time"] = self.draco_reg_time
-        with open(f"{path}test_data/{self.mission}_{self.robot_id}.pickle",
-                  'wb') as handle:
-            pickle.dump(data_log, handle)
 
     def animate_step(self, path) -> None:
 
@@ -1022,7 +1004,7 @@ class Robot():
     def get_keyframes(self, keyframe_id_set):
         msgs = {}
         for keyframe_id in keyframe_id_set:
-            pose_array = self.state_estimate[keyframe_id, :]
+            pose_array = self.local_state_estimate[keyframe_id, :]
             covariance = self.covariance[keyframe_id, :, :]
             if self.truth is not None:
                 pose_array_truth = self.truth[keyframe_id]
@@ -1047,10 +1029,15 @@ class Robot():
         except:
             print("No transformation found for neighbor in object detection")
 
-        return self.loop_closure_manager.update_keyframe_poses_transformed(neighbor_id, self.state_estimate)
+        return self.loop_closure_manager.update_keyframe_poses_transformed(neighbor_id,
+                                                                           self.state_estimate,
+                                                                           self.get_tree())
 
     def perform_graph_match(self):
-        keyframe_id_self, keyframe_id_to_request = self.object_detection.compare_all_neighbor_graph()
+        time0 = time.time()
+        keyframe_id_self, keyframe_id_to_request = (
+            self.object_detection.compare_all_neighbor_graph(
+                self.loop_closure_manager.transformations_neighbor_optimized))
         for robot_id in keyframe_id_to_request.keys():
             if self.update_poses:
                 if robot_id in self.loop_closure_manager.poses_id_neighbor:
@@ -1059,26 +1046,75 @@ class Robot():
             else:
                 keyframe_id_to_request[robot_id] = (
                     self.loop_closure_manager.get_ids_pose_not_received(robot_id, keyframe_id_to_request[robot_id]))
+        time1 = time.time()
+        self.graph_computation_time.append([time1 - time0])
         return keyframe_id_self, keyframe_id_to_request
 
     def get_scans(self, robot_id_to, keyframe_id_set):
         return self.loop_closure_manager.get_keyframes(robot_id_to, keyframe_id_set)
 
-    def receive_scans_from_neighbor(self, neighbor_id, ids, keyframes):
+    def receive_scans_from_neighbor(self, neighbor_id, ids, keyframes, comm_link=None):
         if len(keyframes) == 0:
             return
         self.loop_closure_manager.add_scans_neighbor(neighbor_id, ids, keyframes)
-        self.loop_closure_manager.perform_icp(neighbor_id, self.state_estimate)
+        self.loop_closure_manager.perform_icp(neighbor_id, self.state_estimate, comm_link)
 
     def perform_gcm(self):
         time0 = time.time()
-        loops = self.loop_closure_manager.perform_pcm(self.state_estimate)
+        loops = self.loop_closure_manager.perform_pcm(self.local_state_estimate)
         time1 = time.time()
         self.pcm_run_time.append([time1 - time0])
-        self.icp_success_count = len(self.loop_closure_manager.loops_added)
+        if self.loop_closure_manager.inter_factor_type != 3:
+            self.icp_success_count = len(self.loop_closure_manager.loops_added)
+        self.icp_count = self.loop_closure_manager.icp_count
         return loops
 
+    def get_best_loops(self, loops):
+        loop_dict = {}
+        for loop in loops:
+            if (loop.robot_id, loop.target_keyframe_id) not in loop_dict.keys():
+                loop_dict[(loop.robot_id, loop.target_keyframe_id)] = loop
+            elif loop.overlap > loop_dict[(loop.robot_id, loop.target_keyframe_id)].overlap:
+                loop_dict[(loop.robot_id, loop.target_keyframe_id)] = loop
+        return list(loop_dict.values())
+
+    def convert_loop_type(self, loop: LoopClosureMessage):
+        new_loop = LoopClosure(source_key=loop.target_keyframe_id,
+                               target_key=loop.source_keyframe_id,
+                               source_points=None,
+                               target_points=None,
+                               source_context=None,
+                               target_context=None,
+                               target_pose_their_frame=self.partner_robot_trajectories[loop.robot_id][
+                                   loop.source_keyframe_id])
+        gtsam_pose = gtsam.Pose2(loop.between_pose[0], loop.between_pose[1], loop.between_pose[2])
+        new_loop.estimated_transform = gtsam_pose.inverse()
+        new_loop.target_robot_id = loop.robot_id
+        new_loop.source_robot_id = self.robot_id
+        source_pose = self.state_estimate[loop.target_keyframe_id, :]
+        new_loop.source_pose = gtsam.Pose2(source_pose[0], source_pose[1], source_pose[2])
+        new_loop.target_pose = new_loop.source_pose.compose(new_loop.estimated_transform)
+        new_loop.cov = loop.cov
+        return new_loop
+
+    def add_inter_robot_loop_closure_draco(self, loop_closures):
+        loops_new = []
+        if self.loop_closure_manager.use_best_loop:
+            loop_closures = self.get_best_loops(loop_closures)
+        for loop in loop_closures:
+            loop_new = self.convert_loop_type(loop)
+            loops_new.append(loop_new)
+        if self.loop_closure_manager.noise_model_type == 2:
+            robust = True
+        else:
+            robust = False
+
+        self.merge_slam(loops_new, robust=robust)
+        return loops_new
+
     def add_inter_robot_loop_closure(self, loop_closures):
+        if self.loop_closure_manager.use_best_loop:
+            loop_closures = self.get_best_loops(loop_closures)
         neighbor_robot_state_to_update = set()
         for loop in loop_closures:
             source_ch = chr(96 + loop.robot_id)
@@ -1094,7 +1130,9 @@ class Robot():
             if self.loop_closure_manager.noise_model_type == 0:
                 noise_model = gtsam.noiseModel.Diagonal.Sigmas(np.array(self.prior_sigmas))
             elif self.loop_closure_manager.noise_model_type == 1:
-                noise_model = gtsam.noiseModel.Gaussian.Covariance(loop.cov)
+                cov = loop.cov * 0.01
+                cov[2, 2] = cov[2, 2] * 0.1
+                noise_model = gtsam.noiseModel.Gaussian.Covariance(cov)
             else:
                 noise_model = self.create_robust_noise_model(self.prior_sigmas)
 
@@ -1105,15 +1143,15 @@ class Robot():
             if source_key not in self.loop_closure_manager.robot_key_added:
                 # add initial value for inter-robot loop closure
                 self.loop_closure_manager.robot_key_added.add(source_key)
-                # target_pose = gtsam.Pose2(self.state_estimate[target_id][0],
-                #                           self.state_estimate[target_id][1],
-                #                           self.state_estimate[target_id][2])
-                # self.values.insert(source_key,
-                #                    target_pose.compose(between_pose.inverse()))
-                source_pose = gtsam.Pose2(source_pose_msg.pose_transformed[0],
-                                          source_pose_msg.pose_transformed[1],
-                                          source_pose_msg.pose_transformed[2])
-                self.values.insert(source_key, source_pose)
+                target_pose = gtsam.Pose2(self.state_estimate[target_id][0],
+                                          self.state_estimate[target_id][1],
+                                          self.state_estimate[target_id][2])
+                self.values.insert(source_key,
+                                   target_pose.compose(between_pose.inverse()))
+                # source_pose = gtsam.Pose2(source_pose_msg.pose_transformed[0],
+                #                           source_pose_msg.pose_transformed[1],
+                #                           source_pose_msg.pose_transformed[2])
+                # self.values.insert(source_key, source_pose)
 
                 if self.loop_closure_manager.inter_factor_type == 0:
                     self.add_inter_robot_priori_factor(loop)
@@ -1170,13 +1208,16 @@ class Robot():
         return self.factors[self.slam_step]
 
     def receive_factors_from_neighbor(self, robot_id, factors):
+        if self.loop_closure_manager.inter_factor_type != 2:
+            return
         if robot_id not in self.loop_closure_manager.factors_neighbor.keys():
             self.loop_closure_manager.factors_neighbor[robot_id] = []
         self.loop_closure_manager.factors_neighbor[robot_id].append(factors)
 
         # If do the whole graph update, update after initial inter robot loop closures are added
-        if self.loop_closure_manager.inter_factor_type == 2 and robot_id in self.loop_closure_manager.neighbor_added:
+        if robot_id in self.loop_closure_manager.neighbor_added:
             self.add_inter_robot_whole_graph(robot_id)
+            self.update_graph()
 
     def receive_latest_states_from_neighbor(self, robot_id, states):
         self.partner_robot_trajectories[robot_id] = states
@@ -1205,6 +1246,7 @@ class Robot():
             transformation_matrix[:2, :2] = R
             transformation_matrix[:2, 2] = t
         except:
+            print("transformation not found!")
             return
         pose = matrix_to_state(transformation_matrix @ pose)
         self.values.insert(key, numpy_to_gtsam(pose))
@@ -1220,39 +1262,161 @@ class Robot():
                 self.add_to_values(robot_id, factor[1])
 
     def plot_figure(self, path):
-        plt.figure(figsize=(8, 8), dpi=150)
+        fig = plt.figure(figsize=(10, 10.5))
+        spec = fig.add_gridspec(8, 4)
+        axis_grid = fig.add_subplot(spec[:7, :])
         # self.object_detection.plot_figure()
+        co_pa = sns.color_palette('colorblind')
+        co_pa[1] = co_pa[0]
+        labels = {1: "Robot $\\alpha$",
+                  2: "Robot $\\beta$",
+                  3: "Robot $\\gamma$",
+                  -1: "Loop Closure"}
 
-        plt.plot(self.state_estimate[:, 0], self.state_estimate[:, 1], 'c-')
-        plt.scatter(self.object_detection.points[:, 0], self.object_detection.points[:, 1], s=1, c='k')
-        values = self.isam.calculateEstimate()
+        # plot robot's trajectory
+        axis_grid.plot(self.state_estimate[:, 0], self.state_estimate[:, 1], 'o-',
+                       color=co_pa[self.robot_id],
+                       linewidth=2,
+                       zorder=2,
+                       label=labels[self.robot_id])
+        # plot point-cloud from robot itself
+        axis_grid.scatter(self.object_detection.points[:, 0], self.object_detection.points[:, 1],
+                          s=1,
+                          color=co_pa[self.robot_id],
+                          zorder=0)
+
+        for robot_ns, robot_state in self.partner_robot_state_estimates.items():
+            color = co_pa[robot_ns]
+            estimates = np.zeros([len(robot_state), 3])
+            for keyframe_id in self.partner_robot_state_estimates[robot_ns].keys():
+                pose = self.partner_robot_state_estimates[robot_ns][keyframe_id]
+                # points = self.points_partner[robot_ns][keyframe_id]
+                # points = transform_points(points, np.array([pose.x(), pose.y(), pose.theta()]))
+                # axis_grid.scatter(points[:, 0], points[:, 1],
+                #                   s=1, color=co_pa[robot_ns], zorder=0)
+                estimates[keyframe_id] = np.array([pose.x(), pose.y(), pose.theta()])
+            # plot trajectory from robot neighbor
+            axis_grid.plot(estimates[:, 0], estimates[:, 1], 'o-',
+                           color=color,
+                           zorder=1,
+                           linewidth=2,
+                           label=labels[robot_ns])
+
+        if False:
+            for loop in self.loop_closure_manager.loops_added:
+                robot_ns = loop.robot_id
+                color = co_pa[robot_ns]
+                id = loop.source_keyframe_id
+                points = self.loop_closure_manager.points_neighbor[robot_ns][id].points
+                pose = self.partner_robot_state_estimates[robot_ns][id]
+
+                points = transform_points(points, np.array([pose.x(), pose.y(), pose.theta()]))
+                # axis_grid.scatter(pose.x(), pose.y(), c=color, s=20, zorder=1)
+                # plot overlap part of the cloud
+                # axis_grid.scatter(points[:, 0], points[:, 1],
+                #                   s=1,
+                #                   color=color,
+                #                   zorder=1)
+                # plot loop closure
+                axis_grid.plot([pose.x(), self.state_estimate[loop.target_keyframe_id, 0]],
+                               [pose.y(), self.state_estimate[loop.target_keyframe_id, 1]],
+                               color=co_pa[4],
+                               zorder=0)
+        # set font
+        from matplotlib.font_manager import FontProperties
+        font_path = '/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf'
+        font = FontProperties(family='serif', fname=font_path, size=20)
+        axis_grid.set_xlabel("x [m]", fontproperties=font)
+        axis_grid.set_ylabel("y [m]", fontproperties=font)
+        # axis_grid.set_title(f"Optimized Trajectory from {labels[self.robot_id]}", fontproperties=font)
+        # axis_grid.set_xticks([])
+        # axis_grid.set_yticks([])
+        axis_grid.axis('equal')
+        handles, labels = plt.gca().get_legend_handles_labels()
+        unique_labels = dict(zip(labels, handles))
+        fig.legend(unique_labels.values(), unique_labels.keys(),
+                   prop=font, loc='lower center', bbox_to_anchor=(0.5, 0.00), ncols=4)
+        for label in axis_grid.get_xticklabels():
+            label.set_fontproperties(font)
+        for label in axis_grid.get_yticklabels():
+            label.set_fontproperties(font)
+        plt.tight_layout()
+        fig.savefig(path + 'test_data/' + str(self.robot_id) + '/' + str(self.slam_step) + '.svg')
+        plt.close()
+
+    def plot_figure_with_sonar_image(self, axis_image, axis_grid):
+        sns.set_style('darkgrid')
+        self.object_detection.plot_latest_sonar_image(axis_image)
+
+        co_pa = sns.color_palette('colorblind')
+        co_pa[1] = co_pa[0]
+        labels = {1: "Robot $\\alpha$",
+                  2: "Robot $\\beta$",
+                  3: "Robot $\\gamma$",
+                  -1: "Loop Closure"}
+
+        # plot robot's trajectory
+        axis_grid.plot(self.state_estimate[:, 0], self.state_estimate[:, 1], 'o-',
+                       color=co_pa[self.robot_id],
+                       linewidth=2,
+                       zorder=2,
+                       label=labels[self.robot_id])
+        dx = np.cos(self.state_estimate[-1, 2]) * 3
+        dy = np.sin(self.state_estimate[-1, 2]) * 3
+        axis_grid.arrow(self.state_estimate[-1, 0], self.state_estimate[-1, 1], dx, dy, head_width=1.5,
+                        head_length=2, fc='red', ec='red', linewidth=2, zorder = 11)
+        # plot point-cloud from robot itself
+        axis_grid.scatter(self.object_detection.points[:, 0], self.object_detection.points[:, 1],
+                          s=1,
+                          color=co_pa[self.robot_id],
+                          zorder=0)
+
+        for robot_ns, robot_state in self.partner_robot_state_estimates.items():
+            color = co_pa[robot_ns]
+            estimates = np.zeros([len(robot_state), 3])
+            for keyframe_id in self.partner_robot_state_estimates[robot_ns].keys():
+                pose = self.partner_robot_state_estimates[robot_ns][keyframe_id]
+                estimates[keyframe_id] = np.array([pose.x(), pose.y(), pose.theta()])
+            # plot trajectory from robot neighbor
+            axis_grid.plot(estimates[:, 0], estimates[:, 1], '-',
+                           color=color,
+                           zorder=1,
+                           linewidth=2)
 
         for loop in self.loop_closure_manager.loops_added:
             robot_ns = loop.robot_id
-            if robot_ns == 1:
-                color = 'blue'
-            elif robot_ns == 2:
-                color = 'red'
-            else:
-                color = 'orange'
+            color = co_pa[robot_ns]
             id = loop.source_keyframe_id
             points = self.loop_closure_manager.points_neighbor[robot_ns][id].points
-            pose = values.atPose2(gtsam.symbol(chr(96 + robot_ns), id))
+            pose = self.partner_robot_state_estimates[robot_ns][id]
+
             points = transform_points(points, np.array([pose.x(), pose.y(), pose.theta()]))
-            plt.scatter(pose.x(), pose.y(), c=color, s=20)
-            plt.scatter(points[:, 0], points[:, 1], s=1, c=color)
+            # plot overlap part of the cloud
+            axis_grid.scatter(points[:, 0], points[:, 1],
+                              s=1,
+                              color=color,
+                              zorder=1)
 
-        plt.xlim([-80, 80])
-        plt.ylim([-80, 80])
-        plt.axis('equal')
-
-        plt.savefig(path + 'test_data/' + str(self.robot_id) + '/' + str(self.slam_step) + '.png')
-        plt.close()
+        axis_grid.set_xticks(np.arange(-100, 100, 10))
+        axis_grid.set_yticks(np.arange(-100, 100, 10))
+        axis_grid.tick_params(axis='both', labelbottom=False, labelleft=False)
+        axis_grid.grid(True)
+        axis_grid.axis('equal')
+        from matplotlib.font_manager import FontProperties
+        font_path = '/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf'
+        font = FontProperties(family='serif', fname=font_path, size=24)
+        axis_image.set_title(f"{labels[self.robot_id]} Sonar Image",
+                            fontproperties=font)
+        axis_grid.set_title(f"{labels[self.robot_id]}",
+                            fontproperties=font,
+                            color=co_pa[self.robot_id], y = -0.08)
 
     def prepare_loops_to_send(self, loops):
         return self.loop_closure_manager.prepare_loops_to_send(loops)
 
     def check_factor_status(self, robot_id, key):
+        if robot_id not in self.partner_robot_trajectories.keys():
+            return False
         if key >= self.partner_robot_trajectories[robot_id].shape[0]:
             return False
         if self.loop_closure_manager.get_transformation(robot_id) is None:
@@ -1303,65 +1467,49 @@ class Robot():
 
         for robot_id in robot_neighbors:
             self.add_inter_robot_whole_graph(robot_id)
-        self.update_graph()
+        # self.update_graph()
+
+    def get_neighbor_ringkey(self, robot_id, key_id_tuple):
+        key, keyframe_id = key_id_tuple
+        if robot_id not in self.loop_closure_manager.neighbor_ringkeys.keys():
+            self.loop_closure_manager.neighbor_ringkeys[robot_id] = {}
+        self.loop_closure_manager.neighbor_ringkeys[robot_id][keyframe_id] = key
 
     def write_all_trajectories(self, path):
         # TODO: update partner_robot_state_estimate here
-        if self.loop_closure_manager.inter_factor_type == 2:
-            self.isam.update()
-            self.isam.update()
+        partner_robot_state_estimates = {}
+        if self.loop_closure_manager.inter_factor_type == 2 or not self.partner_robot_state_estimates:
             final_values = self.isam.calculateEstimate()
             for robot_id, robot_state in self.partner_robot_trajectories.items():
-                self.partner_robot_state_estimates[robot_id] = np.zeros([robot_state.shape[0]-1, robot_state.shape[1]])
-                for keyframe_id in range(self.partner_robot_trajectories[robot_id].shape[0]-1):
+                self.partner_robot_state_estimates[robot_id] = np.zeros(
+                    [robot_state.shape[0] - 1, robot_state.shape[1]])
+                for keyframe_id in range(self.partner_robot_trajectories[robot_id].shape[0] - 1):
                     ch = chr(96 + robot_id)
                     key = gtsam.symbol(ch, keyframe_id)
                     if key in final_values.keys():
                         pose = final_values.atPose2(key)
                         self.partner_robot_state_estimates[robot_id][keyframe_id] = (
                             np.array([pose.x(), pose.y(), pose.theta()]))
+            partner_robot_state_estimates = self.partner_robot_state_estimates
+        elif self.loop_closure_manager.inter_factor_type == 3:
+            for robot_id, robot_state in self.partner_robot_state_estimates.items():
+                partner_robot_state_estimates[robot_id] = np.zeros([len(robot_state), 3])
+                for keyframe_id in self.partner_robot_state_estimates[robot_id].keys():
+                    pose = self.partner_robot_state_estimates[robot_id][keyframe_id]
+                    partner_robot_state_estimates[robot_id][keyframe_id] = (
+                        np.array([pose.x(), pose.y(), pose.theta()]))
+        else:
+            print("writing not yet implemented")
 
         # record self trajectory
-        robot_self_file_path = f"{path}test_data/{self.mission}_{self.robot_id}_self.txt"
+        robot_self_file_path = f"{path}/{self.mission}_{self.robot_id}_self.txt"
         state_estimate = self.state_estimate
-        for robot_id in sorted(self.partner_robot_state_estimates.keys()):
-            print(robot_id)
-            state_estimate = np.concatenate((state_estimate, self.partner_robot_state_estimates[robot_id]))
+        for robot_id in sorted(partner_robot_state_estimates.keys()):
+            state_estimate = np.concatenate((state_estimate, partner_robot_state_estimates[robot_id]))
         write_trajectory(robot_self_file_path, state_estimate)
         if self.truth is not None:
-            truth = self.truth[:self.slam_step+1]
+            truth = self.truth[:self.slam_step + 1]
             for robot_id in sorted(self.partner_truth.keys()):
-                len_neighbor = self.partner_robot_trajectories[robot_id].shape[0] - 1
+                len_neighbor = len(self.partner_robot_state_estimates[robot_id])
                 truth.extend(self.partner_truth[robot_id][:len_neighbor])
-            write_trajectory(f"{path}test_data/{self.mission}_{self.robot_id}_self_gt.txt", truth)
-
-def write_g2o(graph, values, filename):
-    factors = [graph.at(i) for i in range(graph.size())]
-    lines = []
-    for factor in factors:
-        if isinstance(factor, gtsam.BetweenFactorPose2):
-            keys = factor.keys()
-            key0 = gtsam.Symbol(keys[0])
-            ch0 = chr(key0.chr())
-            id0 = key0.index()
-            measure = factor.measured()
-            key1 = gtsam.Symbol(keys[1])
-            ch1 = chr(key1.chr())
-            id1 = key1.index()
-            cov = factor.noiseModel().covariance()
-            lines.append(f'Between: {ch0}{id0} & {ch1}{id1}, ['
-                         f'{measure.x():.2f} {measure.y():.2f} {measure.theta():.2f}], \n'
-                         f'{cov}\n')
-        if isinstance(factor, gtsam.PriorFactorPose2):
-            keys = factor.keys()
-            key = gtsam.Symbol(keys[0])
-            ch = chr(key.chr())
-            id = key.index()
-            prior = factor.prior()
-            cov = factor.noiseModel().covariance()
-            lines.append(f'Prior: {ch}{id}, [{prior.x():.2f} {prior.y():.2f} {prior.theta():.2f}], \n'
-                         f'{cov}\n')
-
-    with open(filename, "w") as file:
-        for line in lines:
-            file.write(line)
+            write_trajectory(f"{path}/{self.mission}_{self.robot_id}_self_gt.txt", truth)

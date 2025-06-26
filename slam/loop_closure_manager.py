@@ -1,4 +1,5 @@
 import copy
+import time
 
 import gtsam
 import numpy as np
@@ -9,7 +10,7 @@ from itertools import combinations
 from collections import defaultdict
 from slam.utils import find_cliques
 import yaml
-
+import seaborn as sns
 
 class RobotMessage:
     def __init__(self, robot_id, keyframe_id, pose, covariance, pose_truth=None):
@@ -28,10 +29,14 @@ class RobotMessage:
 
 
 class ScanMessage:
-    def __init__(self, robot_id, keyframe_id, points):
+    def __init__(self, robot_id, keyframe_id, points, context):
         self.robot_id = robot_id
         self.id = keyframe_id
+        self.context = context
         self.points = points
+
+    def get_size(self):
+        return (self.points.shape[0] * self.points.shape[1]) * 16 + 8 * 2
 
 
 class LoopClosureMessage:
@@ -47,6 +52,8 @@ class LoopClosureMessage:
 
         # for evaluation purpose
         self.between_pose_truth = None
+
+        self.overlap = -1.0
 
         # covariance matrix based on the fitness score
         self.cov = None
@@ -92,6 +99,8 @@ class LoopClosureManager:
 
         self.icp_config = config['icp']
         self.window_size = config['window_size']
+        self.icp_count = 0
+        self.icp_time = []
 
         self.visualize = config['visualize']
 
@@ -104,9 +113,14 @@ class LoopClosureManager:
         self.noise_model_type = config['noise_model_type']
         self.pcm_type = config['pcm_type']
         self.exchange_inter_robot_factor = config['exchange_inter_robot_factor']
+        self.use_best_loop = config['use_best_loop']
+        self.use_context = config['use_context']
+        if self.use_context:
+            self.context_difference = config['context_diff']
 
         # save history scan from robot self for loop closure detection
         self.historical_scans = []
+        self.historical_contexts = []
 
         # ground truth pose for evaluation
         self.ground_truth_self = None
@@ -140,6 +154,14 @@ class LoopClosureManager:
         # value: ndarray transformation from neighbor robot to self robot`
         self.transformations_neighbor = {}
         self.transformations_graph = gtsam.NonlinearFactorGraph()
+        self.transformations_initial = gtsam.Values()
+
+        # fix the transformation for robot itself
+        self.transformations_graph.add(gtsam.PriorFactorPose2(self.robot_ns,
+                                                              gtsam.Pose2(0.0, 0.0, 0.0),
+                                                              gtsam.noiseModel.Isotropic.Sigma(3, 1e-6)))
+        self.transformations_initial.insert(self.robot_ns, gtsam.Pose2(0.0, 0.0, 0.0))
+
         self.transformations_neighbor_optimized = {}
 
         # history loop
@@ -162,10 +184,19 @@ class LoopClosureManager:
         self.factors_neighbor = {}
         self.neighbor_added = set()
 
+        self.neighbor_ringkeys = {}
+
         # list of inter-robot loop closures to be added
         self.inter_loops_to_add = []
 
-    def perform_icp(self, robot_id, latest_states_self):
+    def compare_context(self, source_context, target_context):
+        context_diff = np.sum(abs(source_context - target_context))
+        if context_diff != -1:
+            if np.sum(abs(source_context - target_context)) > self.context_difference:
+                return False
+        return True
+
+    def perform_icp(self, robot_id, latest_states_self, comm_link = None):
         if robot_id not in self.points_id_neighbor:
             return
 
@@ -180,6 +211,13 @@ class LoopClosureManager:
             source_cloud = transform_points(self.points_neighbor[robot_id][id].points, source_pose)
 
             for target_keyframe_id in source_keyframe.matched_keyframe_id:
+                if self.use_context:
+                    source_context = self.points_neighbor[robot_id][id].context
+                    target_context = self.historical_contexts[target_keyframe_id]
+                    if not self.compare_context(source_context, target_context):
+                        continue
+
+                time0 = time.time()
                 loop_this = LoopClosureMessage(source_keyframe_id=id,
                                                target_keyframe_id=target_keyframe_id,
                                                robot_id=robot_id)
@@ -199,7 +237,14 @@ class LoopClosureManager:
                             continue
                         target_cloud = np.vstack((target_cloud,
                                                   transform_points(self.historical_scans[i], latest_states_self[i])))
+                if len(self.historical_scans[target_keyframe_id]) == 0:
+                    continue
                 icp_status, icp_transform = self.icp.compute(source_cloud, target_cloud, np.eye(3))
+                time1 = time.time()
+                if comm_link is not None:
+                    comm_link.log_time(time1 - time0, 'icp')
+                self.icp_count += 1
+                self.icp_time.append(time1 - time0)
                 if not icp_status:
                     # if fall to register, continue
                     continue
@@ -219,7 +264,9 @@ class LoopClosureManager:
                 cov = np.eye(3) * fitness_score * self.cov_scale
                 # cov[2, 2] = cov[2, 2] * 0.1
                 loop_this.set_measurement(pose=matrix_to_state(between_pose), cov=cov, fitness_score=fitness_score)
+                loop_this.overlap = overlap
 
+                source_cloud_transformed3 = None
                 if self.ground_truth_self is not None:
                     # evaluate the loop closure
                     source_truth = source_keyframe.pose_truth
@@ -234,22 +281,69 @@ class LoopClosureManager:
                                                           between_truth.theta()]))))
                         source_cloud_transformed3 = transform_points(self.points_neighbor[robot_id][id].points,
                                                                      source_truth)
-                        plt.plot(source_cloud_transformed3[:, 0], source_cloud_transformed3[:, 1], 'y.')
+                        # plt.plot(source_cloud_transformed3[:, 0], source_cloud_transformed3[:, 1], 'y.')
 
                 if self.visualize:
-                    plt.plot(source_cloud[:, 0], source_cloud[:, 1], 'r.')
-                    plt.plot(target_cloud[:, 0], target_cloud[:, 1], 'b.')
+                    fig = plt.figure(figsize=(10, 6), dpi = 150)
+                    # fig = plt.figure(figsize=(12, 6), dpi = 150)
+                    sns.set_theme(style="white")
+                    spec = fig.add_gridspec(5, 2)
+                    co_pa = sns.color_palette('bright')
+                    from matplotlib.font_manager import FontProperties
+                    font_path = '/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf'
+                    font = FontProperties(family='serif', fname=font_path, size=20)
+                    axis_grid_0 = fig.add_subplot(spec[:4, 0])
+                    axis_grid_1 = fig.add_subplot(spec[:4, 1])
+                    axis_grid_0.scatter(source_cloud[:, 0], source_cloud[:, 1], s=10,
+                                        color=co_pa[1], label = 'Source Cloud', zorder=5)
+                    axis_grid_0.scatter(target_cloud[:, 0], target_cloud[:, 1], color='black', s=10,
+                                        label = 'Target Cloud')
+                    axis_grid_1.scatter(target_cloud[:, 0], target_cloud[:, 1], color='black', s=10)
+                    axis_grid_0.set_aspect('equal')
+                    axis_grid_1.set_aspect('equal')
                     source_cloud_transformed2 = transform_points(self.points_neighbor[robot_id][id].points,
                                                                  source_pose_new)
-                    plt.plot(source_cloud_transformed2[:, 0], source_cloud_transformed2[:, 1], 'g.')
+                    axis_grid_1.scatter(source_cloud_transformed2[:, 0],
+                                        source_cloud_transformed2[:, 1], color=co_pa[2], s=10,
+                                        label='Source Cloud (Registered)', zorder=5)
+                    if source_cloud_transformed3 is not None:
+                        axis_grid_1.scatter(source_cloud_transformed3[:, 0],
+                                            source_cloud_transformed3[:, 1], color=co_pa[3], s=10,
+                                            label='Source Cloud (GT)', zorder=5)
+                    fig.legend(prop=font, loc='lower center', ncol=3, bbox_to_anchor=(0.5, 0.05))
+                    axis_grid_0.set_xlabel('x [m]', fontproperties=font)
+                    axis_grid_0.set_ylabel('y [m]', fontproperties=font)
+                    axis_grid_1.set_xlabel('x [m]', fontproperties=font)
+                    axis_grid_1.set_ylabel('y [m]', fontproperties=font)
+                    for label in axis_grid_0.get_xticklabels():
+                        label.set_fontproperties(font)
+                    for label in axis_grid_0.get_yticklabels():
+                        label.set_fontproperties(font)
+                    for label in axis_grid_1.get_xticklabels():
+                        label.set_fontproperties(font)
+                    for label in axis_grid_1.get_yticklabels():
+                        label.set_fontproperties(font)
+                    axis_grid_0.set_xticks(range(int(axis_grid_0.get_xticks()[0]),
+                                                 int(axis_grid_0.get_xticks()[-1])+1, 10))
+                    axis_grid_0.set_yticks(range(int(axis_grid_0.get_yticks()[0]),
+                                                 int(axis_grid_0.get_yticks()[-1])+1, 10))
+                    axis_grid_1.set_xticks(range(int(axis_grid_0.get_xticks()[0]),
+                                                 int(axis_grid_0.get_xticks()[-1])+1, 10))
+                    axis_grid_1.set_yticks(range(int(axis_grid_0.get_yticks()[0]),
+                                                 int(axis_grid_0.get_yticks()[-1])+1, 10))
+                    plt.tight_layout()
                     plt.savefig(f"animate/loop/loop_"
                                 f"{self.robot_ns}_{target_keyframe_id}_{robot_id}_{id}:{overlap:.1f}.png")
+
                     plt.close()
 
                 self.loops[loop_key] = loop_this
 
     def add_scan(self, scan):
         self.historical_scans.append(scan)
+
+    def add_context(self, context):
+        self.historical_contexts.append(context)
 
     def add_keyframes_neighbor(self, robot_id, ids, keyframes):
         if robot_id in self.poses_neighbor:
@@ -272,7 +366,7 @@ class LoopClosureManager:
             return ids
         return ids.difference(self.poses_id_neighbor[robot_id])
 
-    def update_keyframe_poses_transformed(self, robot_id, latest_states_self):
+    def update_keyframe_poses_transformed(self, robot_id, latest_states_self, tree):
         if robot_id not in self.poses_neighbor:
             return
         R, t = self.transformations_neighbor[robot_id]
@@ -280,13 +374,36 @@ class LoopClosureManager:
         transformation[:2, :2] = R
         transformation[:2, 2] = t
         neighbor_keyframe_id_matched = set()
-        for keyframe_id, keyframe in self.poses_neighbor[robot_id].items():
-            keyframe.pose_transformed = matrix_to_state(np.dot(transformation, state_to_matrix(keyframe.pose)))
-            keyframe.covariance_transformed = np.dot(transformation, np.dot(keyframe.covariance, transformation.T))
-            if self.use_ringkey:
-                # TODO: implement ringkey
-                pass
-            else:
+
+        if self.use_ringkey:
+            for keyframe_id, keyframe in self.poses_neighbor[robot_id].items():
+                keyframe.pose_transformed = matrix_to_state(np.dot(transformation, state_to_matrix(keyframe.pose)))
+                keyframe.covariance_transformed = np.dot(transformation, np.dot(keyframe.covariance, transformation.T))
+
+            ringkeys_left = {}
+            while self.neighbor_ringkeys[robot_id]:
+                keyframe_id, neighbor_key = self.neighbor_ringkeys[robot_id].popitem()
+                if keyframe_id not in self.poses_neighbor[robot_id].keys():
+                    ringkeys_left[keyframe_id] = neighbor_key
+                    continue
+                keyframe = self.poses_neighbor[robot_id][keyframe_id]
+                # get the tree we want to search against
+                distances, indices = tree.query(neighbor_key,k=5,distance_upper_bound=20) # search
+                indices = indices[distances <= 20]
+                if len(indices) > 0:
+                    keyframe.matched_keyframe_id = indices
+                    # if no nearby robot scan, do not request scan from neighbor
+                    if robot_id in self.points_id_neighbor:
+                        if keyframe.id not in self.points_id_neighbor[robot_id]:
+                            neighbor_keyframe_id_matched.add(keyframe.id)
+                    else:
+                        neighbor_keyframe_id_matched.add(keyframe_id)
+            self.neighbor_ringkeys[robot_id] = ringkeys_left
+        else:
+            for keyframe_id, keyframe in self.poses_neighbor[robot_id].items():
+                keyframe.pose_transformed = matrix_to_state(np.dot(transformation, state_to_matrix(keyframe.pose)))
+                keyframe.covariance_transformed = np.dot(transformation, np.dot(keyframe.covariance, transformation.T))
+
                 dist = np.linalg.norm(latest_states_self[:, :2] - keyframe.pose_transformed.reshape(-1, 3)[:, :2],
                                       axis=1)
                 angular_dist = (latest_states_self[:, 2] - keyframe.pose_transformed[2]) % (2 * np.pi)
@@ -385,7 +502,11 @@ class LoopClosureManager:
 
     def perform_pcm(self, latest_states_self):
         if self.pcm_type == 0:
-            loops = self.loops.values()
+            graph_dict = loop_per_robot(self.loops.values(), lambda r: r.checked)
+            loops = graph_dict[False]
+            for loop in loops:
+                loop_key = (loop.robot_id, loop.source_keyframe_id, loop.target_keyframe_id)
+                self.loops[loop_key].checked = True
         elif self.pcm_type == 1:
             loops = self.pcm(latest_states_self)
         else:
@@ -472,9 +593,27 @@ class LoopClosureManager:
             matrix_target = state_to_matrix(latest_states_self[id_1, :])
             matrix_between = state_to_matrix(loop.between_pose)
             matrix_self = matrix_target @ np.linalg.inv(matrix_between)
-            pose_transformation = matrix_to_state(matrix_self @ np.linalg.inv(matrix_neighbor))
+            pose = matrix_to_state(matrix_self @ np.linalg.inv(matrix_neighbor))
+            pose_btwn = gtsam.Pose2(pose[0], pose[1], pose[2])
+            noise_model = gtsam.noiseModel.Gaussian.Covariance(loop.cov)
+            if loop.overlap < 0.9:
+                robust = gtsam.noiseModel.mEstimator.Cauchy.Create(1.0)
+                noise_model = gtsam.noiseModel.Robust.Create(robust, noise_model)
 
-
+            factor = gtsam.BetweenFactorPose2(ch_1, ch_0, pose_btwn, noise_model)
+            if ch_0 not in self.transformations_initial.keys():
+                self.transformations_initial.insert(ch_0, pose_btwn)
+            self.transformations_graph.add(factor)
+        optimizer = gtsam.LevenbergMarquardtOptimizer(self.transformations_graph, self.transformations_initial)
+        self.transformations_initial = optimizer.optimize()
+        # update the optimized transformation
+        for robot_id in self.transformations_initial.keys():
+            if robot_id == self.robot_ns:
+                continue
+            pose = self.transformations_initial.atPose2(robot_id)
+            mat = state_to_matrix(np.array([pose.x(), pose.y(), pose.theta()]))
+            # self.transformations_neighbor_optimized[robot_id] = (mat[:2, :2], mat[:2, 2])
+            # print("transformation_optimized: ", mat)
 
     def get_keyframes(self, robot_id_to, keyframe_id_set):
         msgs = {}
@@ -489,7 +628,8 @@ class LoopClosureManager:
                 continue
             msgs[keyframe_id] = ScanMessage(robot_id=self.robot_ns,
                                             keyframe_id=keyframe_id,
-                                            points=self.historical_scans[keyframe_id])
+                                            points=self.historical_scans[keyframe_id],
+                                            context=self.historical_contexts[keyframe_id])
             msgs_id_set.add(keyframe_id)
             if len(msgs) >= self.num_scan_one_time:
                 break
@@ -518,6 +658,20 @@ class LoopClosureManager:
             return self.transformations_neighbor[robot_id]
         else:
             return None
+
+    def record_all_loops(self, path):
+        with open(path, "w") as file:
+            file.write(f"robot0, id0, robot1, id1, dx, dy, dtheta, "
+                       f"dx_truth, dy_truth, dtheta_truth, num_points, overlap\n")
+            for loop in self.loops.values():
+                file.write(f"{loop.robot_id}, {loop.source_keyframe_id}, "
+                           f"{self.robot_ns}, {loop.target_keyframe_id}, "
+                           f"{loop.between_pose[0]:.3f}, {loop.between_pose[1]:.3f}, {loop.between_pose[2]:.3f}, "
+                           f"{loop.between_pose_truth.x():.3f}, "
+                           f"{loop.between_pose_truth.y():.3f}, "
+                           f"{loop.between_pose_truth.theta():.3f}, "
+                           f"{len(self.points_neighbor[loop.robot_id][loop.source_keyframe_id].points)}, "
+                           f"{loop.overlap}\n")
 
 
 def compute_covariance(T1, T2, cov1, cov2):

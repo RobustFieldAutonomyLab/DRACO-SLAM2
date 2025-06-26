@@ -1,22 +1,24 @@
 # Dump all parameters here
 
 # different per dataset
+version: 1               # 1 for DRACO1 & 2 for DRACO2
+visualization: False               # whether plot the result, since the plotting is quite time-consuming
 dataset:
   sim: True              # if you are using simulated data or not
                          # if True, the data loader grabs ground truth information
   mission: "usmma"       # "plane" "usmma" "usmma_real"
   study_samples: 1       # number of re-run
-  total_slam_steps: 60   # number of steps in the slam mission
-                         # plane 80, usmma_sim 60, summa real 103
+  total_slam_steps: 0    # number of steps in the slam mission
+                         # plane 80, usmma_sim 60, summa real 50
   num_robots: 3          # number of robots in the dataset
   mode: 0                # DRACO (0) or ALCS (1)
+                         # (ALCS is a parameter for DRACO1, not used for DRACO2)
   min_uncertainty: 0.015 # minimum uncertainty for ALCS
 
   update_poses: True     # if you want to update the poses from neighbors
 
   object_detection:
     object_icp: config/object_icp.yaml
-    model: models/real_data_model.h5
     feature_extraction: config/feature.yaml
     graph_matching: config/graph.yaml
   loop_closure: config/loop.yaml
@@ -43,5 +45,8 @@ loop_closure:
                           # plane: 0.85 usmma_sim: 0.65
   max_tree_dist: 20       # max Kdtree distance to accept a loop closure
   knn: 5                  # number of neighbors for kd search
-  alcs_overlap: 0.55      # overlap needed for ALCS
+  alcs_overlap: 0.55      # overlap needed for ALCS,
+                          # not needed by DRACO2, only for comparison purpose with old version
+
+
 

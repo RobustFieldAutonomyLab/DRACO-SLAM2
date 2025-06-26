@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 import cv_bridge
-from tensorflow import keras
+# from tensorflow import keras
 from sklearn.cluster import DBSCAN
 from scipy.interpolate import interp1d
 from sensor_msgs.msg import Image, PointCloud2, PointField, CompressedImage
@@ -137,8 +137,8 @@ class ObjectDetection:
         self.time_log = []
         self.vis_3D = True
 
-        self.model = keras.models.load_model(params["model"])
-        self.model.make_predict_function()
+        # self.model = keras.models.load_model(params["model"])
+        # self.model.make_predict_function()
 
     def buildMask(self):
         # Build an image mask to determine if a point is outside the sonar block

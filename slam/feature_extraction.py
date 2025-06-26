@@ -153,8 +153,11 @@ class FeatureExtraction:
         # convert the detected feature points into cartesian coordinate
         peaks = cv2.remap(peaks, self.map_x, self.map_y, cv2.INTER_LINEAR)
         locs = np.c_[np.nonzero(peaks)]
+        import seaborn as sns
+        color = sns.color_palette("colorblind")[2]
+        color = (color[2] * 255, color[1] * 255, color[0] * 255)
         for loc in locs:
-            cv2.circle(vis_img_copy, (loc[1], loc[0]), 5, (0, 0, 255), -1)
+            cv2.circle(vis_img_copy, (loc[1], loc[0]), 5, color, -1)
 
         if self.convert:
             x = locs[:, 1] - self.cols / 2.

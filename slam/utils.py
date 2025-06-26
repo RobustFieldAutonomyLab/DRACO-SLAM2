@@ -418,14 +418,17 @@ def search_for_loops(reg, robots: dict, comm_link, robot_id_source: int, robot_i
     MIN_OVERLAP = config['min_overlap']
     MAX_TREE_DIST = config['max_tree_dist']
     KNN = config['knn']
-    alcs_overlap = config['alcs_overlap']
+    alcs_overlap = config['alcs_overlap'] # for DRACO 1
 
     loop_list = []
 
     if robots[robot_id_source].is_merged(robot_id_target) == False:
+        time0 = time.time()
         ring_key, ring_key_index = robots[robot_id_source].get_key()  # get the descipter we want to search with
         tree = robots[robot_id_target].get_tree()  # get the tree we want to search against
         distances, indexes = tree.query(ring_key, k=KNN, distance_upper_bound=MAX_TREE_DIST)  # search
+        time1 = time.time()
+        comm_link.log_time(time1 - time0, time_type='ringkey')
 
         # TODO check if we need submap size here
         source_points = robots[robot_id_source].get_robot_points(ring_key_index, 1)  # pull the cloud at source
@@ -461,9 +464,9 @@ def search_for_loops(reg, robots: dict, comm_link, robot_id_source: int, robot_i
 
             # log the comms cost
             required_data, comms_cost_request = robots[robot_id_source].check_for_data(robot_id_target, j)
-            comm_link.log_message(comms_cost_request)
+            comm_link.log_message(comms_cost_request, usage_type='scan_id')
             comms_cost_point_clouds = robots[robot_id_target].get_data(required_data)
-            comm_link.log_message(comms_cost_point_clouds)
+            comm_link.log_message(comms_cost_point_clouds, usage_type='scan')
 
             target_points = robots[robot_id_target].get_robot_points(j, submap_size)  # pull the cloud at target
             target_context = robots[robot_id_target].get_context_index(j)  # pull the context image at target
@@ -487,6 +490,7 @@ def search_for_loops(reg, robots: dict, comm_link, robot_id_source: int, robot_i
             if robots[robot_id_source].is_merged(robot_id_target) == False:
                 start_time = time.time()
                 loop_out = reg.evaluate(loop, MIN_POINTS, RATIO_POINTS, CONTEXT_DIFFERENCE, MIN_OVERLAP)
+                comm_link.log_time(time.time() - start_time, 'icp')
                 robots[robot_id_source].draco_reg_time.append(time.time() - start_time)
             else:
                 start_time = time.time()
