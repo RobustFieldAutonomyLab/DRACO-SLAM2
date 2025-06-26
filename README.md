@@ -1,5 +1,5 @@
 # DRACO-SLAM2
-**This repository accompanies the paper *[DRACo-SLAM2: Distributed Robust Acoustic Communication-efficient SLAM for Imaging Sonar Equipped Underwater Robot Teams with Object Graph Matching, presented at IROS 2025]()*.**
+**This repository accompanies the paper *[DRACo-SLAM2: Distributed Robust Acoustic Communication-efficient SLAM for Imaging Sonar Equipped Underwater Robot Teams with Object Graph Matching]()* (IROS 2025).**
 
 **DRACo-SLAM2** is a distributed SLAM framework for underwater robot teams equipped with imaging sonar. 
 This framework improves upon the original [DRACo-SLAM](https://github.com/jake3991/DRACo-SLAM) by introducing a novel representation of sonar maps as object graphs and utilizing object graph matching to achieve time-efficient inter-robot loop closure detection without relying on prior geometric information. 
