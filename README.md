@@ -1,4 +1,6 @@
 # DRACO-SLAM2
+**This repository accompanies the paper *[DRACo-SLAM2: Distributed Robust Acoustic Communication-efficient SLAM for Imaging Sonar Equipped Underwater Robot Teams with Object Graph Matching, presented at IROS 2025]()*.**
+
 **DRACo-SLAM2** is a distributed SLAM framework for underwater robot teams equipped with imaging sonar. 
 This framework improves upon the original [DRACo-SLAM](https://github.com/jake3991/DRACo-SLAM) by introducing a novel representation of sonar maps as object graphs and utilizing object graph matching to achieve time-efficient inter-robot loop closure detection without relying on prior geometric information. 
 To better-accommodate the needs and characteristics of underwater scan matching, we propose incremental Group-wise Consistent Measurement Set Maximization (GCM), a modification of Pairwise Consistent Measurement Set Maximization (PCM), which effectively handles scenarios where nearby inter-robot loop closures share similar registration errors.
@@ -39,5 +41,4 @@ source devel/setup.sh
 python FOLDER_DRACO2/scripts/run_mission.py -b PATH_TO_BAG -p PATH_TO_PICKLE -y config/param.yaml -o PATH_TO_OUTPUT
 # bag file not needed for real-world example in our case
 ```
-
 
