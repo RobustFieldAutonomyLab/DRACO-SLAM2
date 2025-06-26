@@ -29,7 +29,7 @@ To better-accommodate the needs and characteristics of underwater scan matching,
 
 ## Dependencies
 - [BRUCE-SLAM](https://github.com/jake3991/sonar-SLAM)
-- We provide there example [datasets]()
+- We provide there example [datasets](https://huggingface.co/datasets/yeweihuang/DRACO2_Datasets).
 ## How to use
 
 ```
@@ -37,6 +37,7 @@ cd FOLDER_BRUCE_SLAM
 source /opt/ros/noetic/setup.sh
 source devel/setup.sh
 python FOLDER_DRACO2/scripts/run_mission.py -b PATH_TO_BAG -p PATH_TO_PICKLE -y config/param.yaml -o PATH_TO_OUTPUT
+# bag file not needed for real-world example in our case
 ```
 
 
