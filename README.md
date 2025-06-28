@@ -4,10 +4,9 @@
 **DRACo-SLAM2** is a distributed SLAM framework for underwater robot teams equipped with imaging sonar. 
 This framework improves upon the original [DRACo-SLAM](https://github.com/jake3991/DRACo-SLAM) by introducing a novel representation of sonar maps as object graphs and utilizing object graph matching to achieve time-efficient inter-robot loop closure detection without relying on prior geometric information. 
 To better-accommodate the needs and characteristics of underwater scan matching, we propose incremental Group-wise Consistent Measurement Set Maximization (GCM), a modification of Pairwise Consistent Measurement Set Maximization (PCM), which effectively handles scenarios where nearby inter-robot loop closures share similar registration errors.
-<p align="center"><img src="fig/pipeline.jpg" width=700></p>
+<p align="center"><img src="fig/pipeline_new.jpg" width=700></p>
 
 - **Overview of DRACo-SLAM2 Architecture:**
-  - Each robot’s object map is clustered using  to group . 
   - The local robot:
     - Groups nearby feature points into an object map using **DBSCAN**.
     - Receives a neighboring robot’s object map. 
